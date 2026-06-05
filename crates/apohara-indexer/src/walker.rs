@@ -238,7 +238,10 @@ mod tests {
         // A "minified" asset: one enormous line, well under MAX_FILE_BYTES but
         // pure noise (mirrors hugo's renderkatex.bundle.js / livereload.min.js).
         let minified = format!("var x = \"{}\";\n", "a".repeat(MAX_LINE_BYTES * 4));
-        assert!((minified.len() as u64) < MAX_FILE_BYTES, "fixture stays under the size cap");
+        assert!(
+            (minified.len() as u64) < MAX_FILE_BYTES,
+            "fixture stays under the size cap"
+        );
         fs::write(root.join("bundle.min.js"), &minified).unwrap();
         // A normal source file with short lines must still be indexed.
         fs::write(root.join("ok.rs"), "fn ok() {}\nfn two() {}\n").unwrap();

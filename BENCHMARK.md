@@ -300,9 +300,9 @@ load, and the `meta` refuse-to-mix guard are all real and tested.
 **1b landed (US-1B): the `gguf-embed` feature now runs a REAL candle `BertModel`
 forward-pass** (attention-masked mean-pool + L2-normalize) over a user-supplied
 local safetensors checkpoint — `std::fs` only, no network, no `hf-hub`. A
-`cargo tree -e normal` check asserts **zero ML crates** in BOTH the default and
-`--features gguf-embed` builds (candle/tokenizers are optional, feature-gated), so
-the no-model default stays provable. A unit test loads a real `all-MiniLM-L6-v2`
+`cargo tree -e normal` check asserts **zero ML crates in the DEFAULT build**
+(candle/tokenizers are optional + `gguf-embed`-gated; enabling the feature *does*
+pull them in — that is the opt-in), so the no-model default stays provable. A unit test loads a real `all-MiniLM-L6-v2`
 and confirms the forward-pass is correct: paraphrases embed closer than unrelated
 text, vectors are L2-normalized, `embed` is deterministic. A missing/invalid model
 still falls back to feature-hash + a stderr warning (never panics, never fetches).

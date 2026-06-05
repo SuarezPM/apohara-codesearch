@@ -294,22 +294,24 @@ impl GgufEmbedder {
         );
 
         // tokenizer.json -> tokenizers::Tokenizer.
-        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path).map_err(|e| {
-            anyhow::anyhow!("load tokenizer '{}': {e}", tokenizer_path.display())
-        })?;
+        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
+            .map_err(|e| anyhow::anyhow!("load tokenizer '{}': {e}", tokenizer_path.display()))?;
 
         // model.safetensors -> VarBuilder (mmaped, CPU, F32).
         let device = candle_core::Device::Cpu;
         // SAFETY: from_mmaped_safetensors mmaps the file read-only; the path is a
         // user-supplied local checkpoint, read with no network.
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[weights_path.clone()], DType::F32, &device)
-                .with_context(|| {
-                    format!("mmap safetensors weights '{}'", weights_path.display())
-                })?
+            VarBuilder::from_mmaped_safetensors(
+                std::slice::from_ref(&weights_path),
+                DType::F32,
+                &device,
+            )
+            .with_context(|| format!("mmap safetensors weights '{}'", weights_path.display()))?
         };
-        let model = BertModel::load(vb, &config)
-            .map_err(|e| anyhow::anyhow!("build BertModel from '{}': {e}", weights_path.display()))?;
+        let model = BertModel::load(vb, &config).map_err(|e| {
+            anyhow::anyhow!("build BertModel from '{}': {e}", weights_path.display())
+        })?;
 
         let id = format!("gguf:{}", dir_stem(&dir));
         Ok(Self {
@@ -492,10 +494,12 @@ mod tests {
     fn gguf_embed_real_round_trip() {
         // Where the one-time, OUTSIDE-the-repo checkpoint lives. Overridable so the
         // test follows a relocated model, but never vendored.
-        let dir = std::env::var(EMBED_MODEL_ENV).unwrap_or_else(|_| {
-            "/home/thelinconx/apohara-models/all-MiniLM-L6-v2".to_string()
-        });
-        if !std::path::Path::new(&dir).join("model.safetensors").exists() {
+        let dir = std::env::var(EMBED_MODEL_ENV)
+            .unwrap_or_else(|_| "/home/thelinconx/apohara-models/all-MiniLM-L6-v2".to_string());
+        if !std::path::Path::new(&dir)
+            .join("model.safetensors")
+            .exists()
+        {
             eprintln!("skipping gguf_embed_real_round_trip: checkpoint not found at {dir}");
             return;
         }
@@ -503,7 +507,11 @@ mod tests {
         let e = GgufEmbedder::load(&dir, EMBED_DIM)
             .expect("the real MiniLM-L6 checkpoint must load under --features gguf-embed");
         assert_eq!(e.dim(), EMBED_DIM);
-        assert!(e.id().starts_with("gguf:"), "id must be gguf:<stem>, got {}", e.id());
+        assert!(
+            e.id().starts_with("gguf:"),
+            "id must be gguf:<stem>, got {}",
+            e.id()
+        );
 
         let cat = e.embed("the cat sat on the mat");
 
