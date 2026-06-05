@@ -114,3 +114,111 @@ Notes:
   index bloat. **Follow-up (own impact analysis, out of US-3 measurement scope):**
   skip generated/minified assets in the walker (heuristic: very high bytes-per-line),
   or cap the stored `body`. Tracked for a future hardening pass.
+
+## External real-OSS comparison (one-off, not in CI, corpus not vendored)
+
+> Recall/MRR over hand-labeled developer queries against two REAL third-party
+> repositories on local disk. Corpus NOT vendored — the repos are cloned once,
+> manually, outside this repo (a one-time online prereq, NOT part of any build,
+> test, or the tool's runtime). The harness reads them ONLY from local disk.
+
+**Pinned commits (reproducibility):**
+
+| Repo | License | SHA |
+|------|---------|-----|
+| [ripgrep](https://github.com/BurntSushi/ripgrep) (Rust, ~52k LOC) | MIT/Unlicense | `82313cf95849bfe425109ad9506a52154879b1b1` |
+| [hugo](https://github.com/gohugoio/hugo) (Go, ~224k LOC) | Apache-2.0 | `7d1b1fb33dd7bdbb0d16dde9509ce15d93f7d894` |
+
+**Harness:** `crates/apohara-codesearch/examples/bench-external.rs` — an *example*
+(never packaged by dist: `dist plan | grep -c bench-external` == 0), mirroring the
+in-CI synthetic `bench-search.rs` exactly (same three modes, same `recall@5`/
+`recall@10`/MRR, same "hybrid worse than best single mode" count, same twice-run
+byte-identical determinism assertion). Same frozen honesty contract: relevance is
+`(file, target_line)` — NOT a `path:start-end` chunk id — so a label survives a
+chunk-boundary change (this is what lets US-4 sweep the caps without re-labeling).
+Run it with:
+
+```bash
+APOHARA_BENCH_EXTERNAL_ROOT=/path/to/parent-of-clones \
+  cargo run --release --example bench-external
+```
+
+where `APOHARA_BENCH_EXTERNAL_ROOT` holds the pre-cloned `ripgrep/` and `hugo/`
+checkouts (unset → the harness prints guidance and exits 0). Default (feature-hash)
+embedder, release binary.
+
+### ripgrep (Rust) slice — 22 labeled queries, 16 known-miss (73%)
+
+| Mode | recall@5 | recall@10 | MRR |
+|------|----------|-----------|-----|
+| BM25-only | 0.273 | 0.409 | 0.1494 |
+| vector-only | 0.045 | 0.045 | 0.0455 |
+| hybrid (RRF) | 0.227 | 0.273 | 0.1191 |
+
+- Queries: 22 (16 — **73%** — committed known-miss, far above the 30% floor)
+- Queries where hybrid < best single mode: **8**
+
+### hugo (Go) slice — 9 labeled queries, 7 known-miss (78%)
+
+| Mode | recall@5 | recall@10 | MRR |
+|------|----------|-----------|-----|
+| BM25-only | 0.222 | 0.444 | 0.2531 |
+| vector-only | 0.000 | 0.000 | 0.0000 |
+| hybrid (RRF) | 0.222 | 0.222 | 0.2389 |
+
+- Queries: 9 (7 — **78%** — committed known-miss, far above the 30% floor)
+- Queries where hybrid < best single mode: **2**
+
+This is the non-Rust signal US-4 needs: the GLOBAL `MAX_CHUNK_LINES`/
+`MAX_CHUNK_BYTES` caps are exercised on a Go corpus too, so a cap sweep cannot be
+tuned on a Rust-only signal. (TS/Python remain unmeasured — OQ-5.)
+
+**Determinism:** metrics are byte-stable. The harness measures each slice twice
+and asserts the two metric sets identical before printing; two *separate* process
+invocations also produce byte-identical stdout (verified by `sha256sum`).
+
+### Read this honestly
+
+On real OSS the feature-hash backend is **weak**, and far weaker than on the small
+synthetic corpus — exactly as the README's "robustness layer, not a semantic
+engine" claim predicts, now measured at repo scale:
+
+- **The hybrid never beats BM25-alone** on either slice; it is equal-or-worse on
+  every metric, and on 8/22 (ripgrep) + 2/9 (hugo) queries fusion *demotes* the
+  relevant chunk below where BM25 ranked it. Several BM25 wins (e.g. ripgrep
+  `parse_low` at rank 6, `matched_stripped` at rank 7; hugo `Convert` at rank 6,
+  `RootMappingFs.Open` at rank 9) are pushed *out of the top-10* by RRF mixing in
+  the near-random vector list. This is the same fusion-tax the synthetic section
+  documents, amplified by repo size.
+- **Vector-only is almost useless:** recall@5 = 0.045 on ripgrep (1 of 22 queries
+  — the JSON-serialize one), 0.000 on hugo. The deterministic feature-hash maps a
+  query to a fixed point with no learned semantics, so on a 52k–224k-LOC repo its
+  KNN list is effectively noise. It contributes a robustness signal (it never
+  *crashes* and degrades gracefully when FTS misses), not a recall signal.
+- **The known-miss rate is high BECAUSE the labels are honest.** Most misses are
+  not exotic: common code tokens (`search`, `path`, `match`, `glob`, `index`)
+  saturate a large single-purpose repo, so even an identifier-aligned query buries
+  the specific target below dozens of equally-lexical chunks. We publish these as
+  known-miss rather than curating them away.
+
+### What a learned embedder would change (qualitative — no live tool comparison)
+
+There is **no live real-embedding tool comparison in this section**, by design: no
+real-embedding code-search tool runs cleanly offline on the target box without a
+model-download path this project refuses to ship (zero-network is SACRED), so a
+half-offline comparison would be *less* honest than omitting it. The `gguf-embed`
+feature exists as a hardened, tested pluggability surface but the real forward-pass
+is deferred (see US-1 / ADR-1); until it lands there is nothing offline to compare
+against.
+
+Qualitatively, a learned code embedder (e.g. a MiniLM-class model matching
+`EMBED_DIM=384`) is the single lever expected to move these numbers, and the data
+above says exactly where: the **known-miss column on natural-language phrasings**
+("avoid reading the whole file into memory" → `mmap`; "shrink stylesheet and
+script files" → `Minify`). Those miss today because the query vocabulary shares no
+token with the code; a learned embedder maps intent and implementation into a
+shared space, so the vector list would stop being noise and start *rescuing* the
+NL queries BM25 cannot serve — which is precisely the case where RRF should add
+recall instead of taxing it. The claim is **not asserted here**: the way to check
+it is to land US-1's real backend and re-run *this exact harness* at the same
+pinned SHAs. Re-running, not re-asserting, is the contract.
