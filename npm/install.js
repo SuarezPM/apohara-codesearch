@@ -52,9 +52,10 @@ function resolvePlatform() {
         `(https://github.com/${REPO}).`
     );
   }
-  // dist asset shape: <app>-<tag>-<target><ext>, e.g.
-  // apohara-codesearch-v0.1.0-x86_64-apple-darwin.tar.xz
-  const asset = `apohara-codesearch-${TAG}-${entry.target}${entry.ext}`;
+  // dist asset shape (cargo-dist 0.32, tag NOT embedded in the asset name):
+  // <app>-<target><ext>, e.g. apohara-codesearch-x86_64-apple-darwin.tar.xz.
+  // The tag lives only in the release download path (see url below).
+  const asset = `apohara-codesearch-${entry.target}${entry.ext}`;
   const url = `https://github.com/${REPO}/releases/download/${TAG}/${asset}`;
   return { asset, url, ext: entry.ext };
 }
@@ -135,7 +136,7 @@ function run(cmd, args) {
 }
 
 // dist archives contain a top-level directory named after the archive stem
-// (e.g. apohara-codesearch-v0.1.0-x86_64-apple-darwin/apohara-codesearch).
+// (e.g. apohara-codesearch-x86_64-apple-darwin/apohara-codesearch).
 // Locate the binary wherever it landed and move it to bin/.
 function placeBinary(destDir) {
   const direct = path.join(destDir, BIN_BASENAME);
