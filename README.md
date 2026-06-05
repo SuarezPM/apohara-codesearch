@@ -1,25 +1,28 @@
+<div align="center">
+
 # apohara-codesearch
 
-**Hybrid code search for your coding agent — one offline binary, no model, no database.**
+**Hybrid code search for your coding agent — _one offline binary, no model, no database._**
 
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
-[![MCP](https://img.shields.io/badge/MCP-stdio%20server-green.svg)](https://modelcontextprotocol.io)
+[![CI](https://img.shields.io/github/actions/workflow/status/SuarezPM/apohara-codesearch/ci.yml?style=for-the-badge&label=CI)](https://github.com/SuarezPM/apohara-codesearch/actions)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=for-the-badge)](#-license)
+[![Rust](https://img.shields.io/badge/rust-stable-orange?style=for-the-badge&logo=rust)](https://www.rust-lang.org)
+[![npm](https://img.shields.io/npm/v/@apohara/codesearch-mcp?style=for-the-badge&label=npm&color=purple)](https://www.npmjs.com/package/@apohara/codesearch-mcp)
+[![MCP](https://img.shields.io/badge/MCP-stdio%20server-success?style=for-the-badge)](https://modelcontextprotocol.io)
 
-`apohara-codesearch` is a single Rust binary that runs as a [Model Context
-Protocol](https://modelcontextprotocol.io) server, giving a coding agent fast,
-fully-offline hybrid search over any local repository. It downloads nothing — no
-embedding model, no external vector or graph database — installs in seconds, and
-runs air-gapped with a few megabytes of resident memory. The only state it keeps
-is one SQLite file.
+**[Quick Start](#-quick-start)** · **[Features](#-features)** · **[Where it fits](#-where-it-fits)** · **[How it works](#-how-it-works--honesty)**
 
-It is a Claude Code MCP plugin, and works with any MCP client.
+A single Rust binary that runs as a [Model Context Protocol](https://modelcontextprotocol.io) server, giving a coding agent fast, **fully-offline** hybrid search over any local repository — no embedding model to download, no external vector or graph database. It installs in seconds, runs air-gapped in a few megabytes of RAM, and keeps its entire state in **one SQLite file**.
 
-## What you get back
+</div>
 
-A `search_code` hit is a chunk with its structure, not just a line number:
+---
 
-```jsonc
+```console
+# Your agent calls the search_code MCP tool:
+search_code(path=".", query="where does the runtime block on a future?")
+
+# → top hit — a chunk WITH its structure, not just a line number:
 {
   "file": "src/runtime/handle.rs",
   "start_line": 241, "end_line": 341,
@@ -31,121 +34,171 @@ A `search_code` hit is a chunk with its structure, not just a line number:
 }
 ```
 
-Structure (signatures, imports/exports, and `struct`/`enum`/`class`/`type`
-symbols) is extracted for **Rust, TypeScript, Python, and Go**. Any other
-language is still searchable — it is indexed as overlapping text windows.
+> Structure (signatures, imports/exports, and `struct`/`enum`/`class`/`type` symbols) is extracted for **Rust, TypeScript, Python, and Go**. Any other language is still searchable — indexed as overlapping text windows.
 
-## Why a hash, not a model
+---
 
-The dominant code-intelligence tools are heavy: Node plus native bindings, a
-C/C++ toolchain for some grammars, an embedded graph or vector database, and a
-learned embedding model that downloads on first run. Their strength is deep code
-understanding. Their cost is that they are anything but lightweight.
+## 💡 Concept
 
-This tool takes the other side of that trade. The embedding is a deterministic
-[blake3](https://github.com/BLAKE3-team/BLAKE3) feature-hash, not a learned
-model — so there is nothing to download, nothing to serve, and the same input
-always produces the same vector. That makes the semantic recall weaker than a
-model-based tool; we compensate with hybrid retrieval rather than pretending the
-hash is semantic.
+> [!NOTE]
+> **A hash, not a model.** The dominant code-intelligence tools are heavy: Node plus native bindings, a C/C++ toolchain for some grammars, an embedded graph or vector database, and a learned embedding model that downloads on first run. Their strength is deep understanding; their cost is that they are anything but lightweight.
 
-|                          | apohara-codesearch                      | graph / embedding tools            | ripgrep        |
-| ------------------------ | --------------------------------------- | ---------------------------------- | -------------- |
-| Runtime dependencies     | one static binary                       | Node + native bindings + toolchain | one binary     |
-| Model download           | none                                    | hundreds of MB                     | none           |
-| External DB / service    | none                                    | embedded graph / vector DB         | none           |
-| Offline / air-gapped     | ✓                                       | usually requires a fetch           | ✓              |
-| Structural context       | signatures + imports/exports (4 langs)  | call graphs, deep                  | text only      |
-| Ranking                  | hybrid BM25 + vector (RRF)              | learned embeddings                 | exact / regex  |
+`apohara-codesearch` takes the other side of that trade. The embedding is a deterministic [blake3](https://github.com/BLAKE3-team/BLAKE3) feature-hash, **not** a learned model — so there is nothing to download, nothing to serve, and the same input always produces the same vector. That makes semantic recall weaker than a model-based tool; we compensate with **hybrid retrieval** (lexical + vector, fused) rather than pretending the hash is semantic. It is a Claude Code MCP plugin, and works with any MCP client.
 
-Lighter than the graph tools, structure-aware where `ripgrep` is text-only. It
-does **not** match a model-based tool on conceptual recall, and it does not build
-a call graph — those are deliberately out of scope.
+---
 
-## Quick start
+## ✨ Features
 
-Register it with your MCP client. For Claude Code, add to `.mcp.json`:
+| | |
+|---|---|
+| 🔌 **MCP stdio server** | Two tools — `search_code` (hybrid) and `reindex` (incremental) — over plain JSON-RPC. Works with Claude Code or any MCP client. |
+| 🦀 **One static binary** | No Node, no native bindings, no toolchain, no service. `cargo install` or `npx`, then run. The only state is one SQLite file. |
+| 🧠 **Hybrid ranking** | BM25 (SQLite FTS5) + a feature-hash vector (sqlite-vec), merged with Reciprocal Rank Fusion, then MMR-diversified. |
+| 🌳 **Structural extraction** | Per-symbol chunks with signatures + file imports/exports for **Rust, TS, Python, Go**; everything else indexed as text. |
+| 📴 **Offline & air-gapped** | Zero network at runtime AND at build. No model fetch, no telemetry, no API keys. |
+| 🪶 **Near-zero footprint** | ~22 MB resident memory indexing a 224k-LOC repo — flat with repo size (memory-bounded pipeline). |
+| ⚡ **Incremental + watch** | `reindex` does blake3 content-hash deltas; the `watch` subcommand keeps the index current as files change (a plain CLI loop, **not** a plugin hook). |
+| 🔁 **Deterministic** | Same input ⇒ same vector ⇒ byte-stable `recall@k`/`MRR`. Re-indexing is stable. |
+
+---
+
+## 🚀 Quick Start
+
+Register it with your MCP client. For **Claude Code**, add to `.mcp.json`:
 
 ```json
 { "mcpServers": { "codesearch": { "command": "npx", "args": ["-y", "@apohara/codesearch-mcp"] } } }
 ```
 
-The `npx` wrapper downloads the right prebuilt binary for your platform on first
-run. Prefer to build from source, or run the binary directly:
+The `npx` wrapper downloads the matching prebuilt binary for your platform on first run. That is the whole install — no model, no database, no daemon.
+
+<details>
+<summary><b>Other acquisition paths</b> — build from source, run directly, keep the index live</summary>
 
 ```bash
-cargo install --path crates/apohara-codesearch   # from a checkout
-# or run the binary directly as an MCP server:
+# Build + install from a checkout (lowest-trust path):
+cargo install --path crates/apohara-codesearch
+
+# Run the binary directly as a stdio MCP server:
 apohara-codesearch serve
+
+# Keep the index current as files change (plain CLI loop, NOT a Claude Code hook):
+apohara-codesearch watch <path>
 ```
 
-That is the whole install. No model, no database, no daemon.
+Prebuilt, per-OS binaries are also published on [Releases](https://github.com/SuarezPM/apohara-codesearch/releases) (built by `cargo-dist`). It installs as a Claude Code plugin via the `apohara` marketplace too.
 
-## Tools
+> [!WARNING]
+> Downloading a prebuilt binary is itself a supply-chain surface. Verify the checksum from the Release, or prefer `cargo install` and build from source.
 
-| Tool          | What it does                                                                                        |
-| ------------- | --------------------------------------------------------------------------------------------------- |
-| `search_code` | Hybrid BM25 + vector search over a repo path. Lazily indexes on first call. Returns the top-k hits. |
-| `reindex`     | Re-index a repo. Incremental by default (blake3 content-hash deltas); `force: true` rebuilds.       |
+</details>
 
-There is also a `watch` subcommand — `apohara-codesearch watch <path>` keeps the
-index current as files change. It is a plain CLI loop, not a plugin hook.
+### Tools
 
-## How it works
+| Tool | What it does |
+|---|---|
+| `search_code` | Hybrid BM25 + vector search over a repo path. Lazily indexes on first call. Returns the top-k hits with structural context. |
+| `reindex` | Re-index a repo. Incremental by default (blake3 content-hash deltas); `force: true` rebuilds from scratch. |
 
-1. **Walk + chunk.** A `.gitignore`-aware walk splits each file into per-symbol
-   chunks (with the symbol's signature attached) plus bounded module-remainder
-   and window chunks, so a giant file never collapses into one diluted chunk.
-2. **Index.** Each chunk gets a BM25 lexical row (SQLite FTS5) and a feature-hash
-   vector row (sqlite-vec), keyed on a shared row id. The lexical and vector
-   sides share one identifier tokenizer, so `parseString` and `parse_string`
-   match each other.
-3. **Search.** A query runs through both BM25 and vector k-NN; the two ranked
-   lists are merged with [Reciprocal Rank
-   Fusion](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf), then the
-   surviving chunks are hydrated with their structural context.
-4. **Stay current.** Re-indexing hashes each file and reprocesses only what
-   changed, in a single transaction that keeps the three tables consistent.
+---
 
-## Footprint at scale
+## 🧭 Where it fits
 
-Measured indexing [tokio](https://github.com/tokio-rs/tokio) (174k LOC of Rust)
-with the default feature-hash embedder on a desktop machine:
+Lighter than the graph tools, structure-aware where `ripgrep` is text-only. It does **not** match a model-based tool on conceptual recall, and it does **not** build a call graph — those are deliberately out of scope.
 
-| Metric               | Value                           |
-| -------------------- | ------------------------------- |
-| Cold index           | ~9 s (835 files, 16,400 chunks) |
-| Peak resident memory | ~22 MB                          |
-| Warm query latency   | ~10 ms                          |
-| Index on disk        | ~40 MB (one SQLite file)        |
+| | apohara-codesearch | graph / embedding tools | ripgrep |
+|---|---|---|---|
+| **Runtime dependencies** | one static binary | Node + native bindings + toolchain | one binary |
+| **Model download** | none | hundreds of MB | none |
+| **External DB / service** | none | embedded graph / vector DB | none |
+| **Offline / air-gapped** | ✓ | usually requires a fetch | ✓ |
+| **Structural context** | signatures + imports/exports (4 langs) | call graphs, deep | text only |
+| **Ranking** | hybrid BM25 + vector (RRF) | learned embeddings | exact / regex |
 
-No out-of-memory, no external process. See [BENCHMARK.md](BENCHMARK.md) for the
-method, the reproduce command, and a retrieval-quality comparison across
-BM25-only, vector-only, and hybrid modes.
+---
 
-## Honest limitations
+## 🔬 How it works / honesty
 
-- **The vector is a robustness layer, not a semantic engine.** Because the
-  embedding is a feature-hash, a conceptual query that shares no tokens with the
-  target will not surface it. On a clean corpus where lexical search already
-  wins, fusion can even be a slight net negative — [BENCHMARK.md](BENCHMARK.md)
-  reports this rather than hiding it.
-- **Deep structural context is out of scope.** It returns signatures and
-  file-level imports/exports, not callers/callees or a call graph.
-- **Optional upgrade path.** A local embedding model can be enabled as an opt-in
-  build feature; the model file is user-supplied and never downloaded, so the
-  default install stays zero-dependency.
+1. **Walk + chunk.** A `.gitignore`-aware walk splits each file into per-symbol chunks (with the symbol's signature attached) plus bounded module-remainder and window chunks, so a giant file never collapses into one diluted chunk.
+2. **Index.** Each chunk gets a BM25 lexical row (SQLite FTS5) and a feature-hash vector row (sqlite-vec), keyed on a shared row id. Both sides share one identifier tokenizer, so `parseString` and `parse_string` match each other.
+3. **Search.** A query runs through both BM25 and vector k-NN; the two ranked lists are merged with [Reciprocal Rank Fusion](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf), diversified with MMR, then the survivors are hydrated with their structural context.
+4. **Stay current.** Re-indexing hashes each file and reprocesses only what changed, in a single transaction that keeps the three tables consistent.
 
-## License
+### Footprint at scale
 
-Licensed under either of
+Measured with the default feature-hash embedder on a Ryzen 5 3600 / 48 GB box, driven over the stdio MCP tools:
 
-- **MIT license** ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
-- **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE) or
-  <https://www.apache.org/licenses/LICENSE-2.0>)
+| Repo | LOC | Cold index | Peak RSS | Warm query | Index on disk |
+|---|---|---|---|---|---|
+| [tokio](https://github.com/tokio-rs/tokio) | 174k Rust | ~10 s | ~22 MB | ~18 ms | 39 MB |
+| [hugo](https://github.com/gohugoio/hugo) | 224k Go | ~26 s | ~24 MB | ~22 ms | 54 MB |
 
-at your option. See [NOTICE](NOTICE) for third-party dependency licenses.
+Peak resident memory is **flat across repo size** — no OOM, no external process. One SQLite file is the only state.
 
-### Contribution
+> [!WARNING]
+> **The vector is a robustness layer, not a semantic engine.** Because the embedding is a feature-hash, a conceptual query that shares no tokens with the target will not surface it — and on a clean corpus where lexical search already wins, fusion can be a slight net negative. [BENCHMARK.md](BENCHMARK.md) **publishes this** (synthetic corpus + a one-off external comparison on real OSS, with ≥30% committed known-miss queries) rather than hiding it. Deep structural context (callers/callees, call graphs) is out of scope by design. A real local embedding model is an **opt-in, user-supplied** build feature — never downloaded — so the default install stays zero-dependency.
 
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+See **[BENCHMARK.md](BENCHMARK.md)** for the method, the reproduce command, and per-mode `recall@k` / `MRR` across BM25-only, vector-only, and hybrid.
+
+---
+
+## 🏗️ Repository layout
+
+```text
+apohara-codesearch/
+├── crates/
+│   ├── apohara-indexer/        # the engine (library)
+│   │   └── src/
+│   │       ├── walker.rs        # .gitignore-aware file walk
+│   │       ├── parser.rs        # tree-sitter structural extraction (Rust/TS/Python/Go)
+│   │       ├── chunker.rs       # per-symbol + bounded module/window chunks
+│   │       ├── tokens.rs        # shared snake/camel identifier tokenizer
+│   │       ├── embeddings.rs    # deterministic blake3 feature-hash vector
+│   │       ├── embedder.rs      # pluggable Embedder trait (opt-in gguf-embed)
+│   │       ├── storage.rs       # SQLite: chunks + FTS5 + sqlite-vec
+│   │       ├── schema.rs        # migrations + embedder refuse-to-mix meta
+│   │       ├── search.rs        # BM25 + vector + RRF + MMR + structural boost
+│   │       └── incremental.rs   # blake3-delta reindex in one transaction
+│   └── apohara-codesearch/     # the MCP server + CLI
+│       ├── src/{main,server,watch,dto}.rs
+│       └── examples/           # bench-search (in-CI) · bench-external (one-off)
+├── npm/                         # @apohara/codesearch-mcp wrapper (downloads the Release binary)
+├── .claude-plugin/ + marketplace.json   # Claude Code plugin manifest
+└── .github/workflows/          # ci.yml (test/clippy/fmt/dist) · release.yml (cargo-dist)
+```
+
+---
+
+## 🗺️ Roadmap
+
+- [x] MCP stdio server (`search_code` + `reindex`) + `watch` subcommand
+- [x] Structural extraction for **Rust, TypeScript, Python, Go**
+- [x] Hybrid retrieval — BM25 + feature-hash vector, RRF + MMR + structural boost
+- [x] Incremental reindex (blake3 content-hash deltas), one SQLite file
+- [x] Honest benchmark — synthetic (in-CI) + external real-OSS, with committed known-miss
+- [x] Large-OSS soak (Rust + Go ≥100k LOC) — flat ~22 MB peak RSS
+- [x] Pluggable `Embedder` trait (opt-in, default stays zero-model)
+- [ ] Real local embedder backend (candle / safetensors, opt-in, user-supplied)
+- [ ] Skip generated/minified assets in the walker (DB-bloat hardening)
+- [ ] Per-language chunk-cap validation (TypeScript / Python)
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome.
+
+1. **Fork** the repository.
+2. Create a feature **branch** (`git checkout -b feature/my-change`).
+3. Make your change and run the suite: `cargo test --workspace` (clippy `-D warnings` + `rustfmt --check` gate CI).
+4. Open a **pull request**.
+
+> Unless you state otherwise, any contribution you intentionally submit for inclusion in this work, as defined in the Apache-2.0 license, shall be dual-licensed as below, without any additional terms or conditions.
+
+---
+
+## 📄 License
+
+Licensed under either of **[MIT](LICENSE-MIT)** or **[Apache-2.0](LICENSE-APACHE)**, at your option. See [NOTICE](NOTICE) for third-party dependency licenses.
+
+Maintained by **[SuarezPM](https://github.com/SuarezPM)**.
