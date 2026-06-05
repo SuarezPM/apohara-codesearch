@@ -298,3 +298,20 @@ doc comments) and re-index. The determinism/property tests
 `module_split_prefers_blank_line`, `module_split_reindex_stable`,
 `rrf_beats_bm25_alone`, plus the synthetic bench twice-run assertion) are the
 regression guard for any future cap change.
+
+## Embedding backend status (honest)
+
+The default build ships **no model** and embeds via a deterministic feature-hash
+(`feature-hash-v1`). The pluggable `Embedder` trait, the user-supplied local-file
+load path, and the `meta` refuse-to-mix guard are all real and tested. The
+optional `gguf-embed` feature is the on-ramp for a real learned embedder, but in
+v0.5 its forward-pass is **deferred (1b)**: `GgufEmbedder::load` deliberately
+returns an error, so a `--features gguf-embed` build with a model file present
+falls back to feature-hash with a stderr warning rather than constructing a
+zero-vector embedder (proven by the `gguf-embed`-gated test
+`gguf_embed_build_refuses_zero_vector_embedder`). A `cargo tree` check asserts
+**zero ML crates** in both the default and `gguf-embed` builds, so the no-model
+guarantee is provable. The external-bench numbers above are exactly the evidence
+that motivates 1b: when the real safetensors backend lands (see
+`.omc/plans/open-questions.md` OQ-3), this harness is re-run at the pinned SHAs to
+prove or disprove a recall lift — it is not asserted here.

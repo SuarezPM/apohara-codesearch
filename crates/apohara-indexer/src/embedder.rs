@@ -227,8 +227,21 @@ pub struct GgufEmbedder {
 #[cfg(feature = "gguf-embed")]
 impl GgufEmbedder {
     /// Load a user-supplied local model file from `model_path`. Reads the file
-    /// from disk with `std::fs` — NO network, NO `hf-hub`. Returns an error
-    /// (never panics) when the file is unreadable, so the caller falls back.
+    /// from disk with `std::fs` — NO network, NO `hf-hub`.
+    ///
+    /// **A2 (v0.5): refuses to construct until the real forward-pass (1b) lands.**
+    /// [`GgufEmbedder::embed`] is still a zero-vector stub, so a constructed
+    /// `GgufEmbedder` would stamp an index `gguf:<stem>` whose every vector is
+    /// all-zero. [`crate::schema::verify_embedder_meta`] compares only `(id, dim)`,
+    /// so it would NOT catch that degradation: a same-feature build would reopen
+    /// the poisoned index and silently mis-rank. To keep that trap closed, `load`
+    /// returns an error until 1b implements real inference; the caller
+    /// ([`load_gguf_or_fallback`]) then falls back to the feature-hash embedder
+    /// with a stderr warning, so a zero-vector embedder is never constructed in
+    /// ANY build. The file is still read + validated here so the error is honest
+    /// about a missing/empty file vs. the deferred backend. Real inference is
+    /// deferred (see `.omc/plans/open-questions.md` OQ-3: a local safetensors
+    /// MiniLM-L6, dim 384, via `candle` `VarBuilder::from_mmaped_safetensors`).
     pub fn load(model_path: &str, dim: usize) -> anyhow::Result<Self> {
         use anyhow::Context;
         let model_bytes = std::fs::read(model_path)
@@ -237,24 +250,27 @@ impl GgufEmbedder {
             !model_bytes.is_empty(),
             "embedding model file '{model_path}' is empty"
         );
-        // INTEGRATION POINT: parse the checkpoint (safetensors/GGUF) and build
-        // the candle model here. Intentionally not vendored — see the struct doc.
-        let id = format!("gguf:{}", file_stem(model_path));
-        Ok(Self {
-            id,
-            dim,
-            model_bytes,
-        })
+        // The id + bytes are exactly what 1b's real ctor will keep; reference them
+        // so the signature stays the real one while we refuse to build the stub.
+        let _ = (file_stem(model_path), dim, &model_bytes);
+        anyhow::bail!(
+            "gguf-embed forward-pass not implemented yet (deferred to 1b); refusing \
+             to construct a zero-vector embedder for '{model_path}'. Falling back to \
+             the built-in feature-hash embedder (no network fetch)."
+        )
     }
 }
 
 #[cfg(feature = "gguf-embed")]
 impl Embedder for GgufEmbedder {
     fn embed(&self, _text: &str) -> Vec<f32> {
-        // INTEGRATION POINT: run the candle forward pass + mean-pooling here.
-        // Until a concrete architecture is wired, return a zero vector of the
-        // declared dim so callers never panic; `active_embedder` only reaches
-        // this once a real model is present, and the meta check guards mixing.
+        // INTEGRATION POINT (1b): run the candle forward pass + mean-pooling here.
+        // This body is currently UNREACHABLE: `GgufEmbedder::load` refuses to
+        // construct until 1b lands (A2), so no `GgufEmbedder` is ever built and
+        // this never runs. We keep a zero vector (NOT `unreachable!()`) to preserve
+        // the never-panic contract once 1b wires real inference. NOTE: the meta
+        // check (`verify_embedder_meta`) does NOT guard a zero-vector here — it
+        // compares only (id, dim); `load` returning Err is what closes the trap.
         vec![0.0f32; self.dim]
     }
     fn id(&self) -> &str {
@@ -356,5 +372,51 @@ mod tests {
             e.embed("fn hello_world() {}"),
             feature_hash_embed("fn hello_world() {}", EMBED_DIM)
         );
+    }
+
+    /// A2 (the runnable guard): with the `gguf-embed` feature ON and a PRESENT,
+    /// non-empty model file, the engine must REFUSE to build a `GgufEmbedder`
+    /// (whose `embed` is a zero-vector stub) and fall back to feature-hash. This
+    /// proves the zero-vector trap is closed in the `gguf-embed` build, not only
+    /// the default build. CI runs `--all-features`, so this path is exercised.
+    #[cfg(feature = "gguf-embed")]
+    #[test]
+    fn gguf_embed_build_refuses_zero_vector_embedder() {
+        use std::io::Write;
+        // A real, present, non-empty model file (the exact condition that would
+        // otherwise construct the zero-vector GgufEmbedder).
+        let path = std::env::temp_dir().join("apohara_a2_present_model.bin");
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            f.write_all(b"non-empty bytes that are not a real checkpoint")
+                .unwrap();
+        }
+        let p = path.to_str().unwrap();
+
+        // 1. load() refuses to construct even with the file present + non-empty.
+        assert!(
+            GgufEmbedder::load(p, EMBED_DIM).is_err(),
+            "gguf-embed load must refuse until the real forward-pass (1b) lands"
+        );
+
+        // 2. the active path routes to feature-hash, never a gguf:* zero-vector.
+        let e = load_gguf_or_fallback(p, EMBED_DIM);
+        assert_eq!(
+            e.id(),
+            FEATURE_HASH_ID,
+            "present model file must fall back to feature-hash, not gguf:*"
+        );
+        let v = e.embed("anything");
+        assert_eq!(
+            v,
+            feature_hash_embed("anything", EMBED_DIM),
+            "fallback embed must be byte-identical to feature-hash"
+        );
+        assert!(
+            v.iter().any(|&x| x != 0.0),
+            "embed must never be an all-zero vector"
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 }
