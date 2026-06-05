@@ -201,27 +201,19 @@ engine" claim predicts, now measured at repo scale:
   the specific target below dozens of equally-lexical chunks. We publish these as
   known-miss rather than curating them away.
 
-### What a learned embedder would change (qualitative — no live tool comparison)
+### What a learned embedder changes — MEASURED (US-1B)
 
-There is **no live real-embedding tool comparison in this section**, by design: no
-real-embedding code-search tool runs cleanly offline on the target box without a
-model-download path this project refuses to ship (zero-network is SACRED), so a
-half-offline comparison would be *less* honest than omitting it. The `gguf-embed`
-feature exists as a hardened, tested pluggability surface but the real forward-pass
-is deferred (see US-1 / ADR-1); until it lands there is nothing offline to compare
-against.
-
-Qualitatively, a learned code embedder (e.g. a MiniLM-class model matching
-`EMBED_DIM=384`) is the single lever expected to move these numbers, and the data
-above says exactly where: the **known-miss column on natural-language phrasings**
-("avoid reading the whole file into memory" → `mmap`; "shrink stylesheet and
-script files" → `Minify`). Those miss today because the query vocabulary shares no
-token with the code; a learned embedder maps intent and implementation into a
-shared space, so the vector list would stop being noise and start *rescuing* the
-NL queries BM25 cannot serve — which is precisely the case where RRF should add
-recall instead of taxing it. The claim is **not asserted here**: the way to check
-it is to land US-1's real backend and re-run *this exact harness* at the same
-pinned SHAs. Re-running, not re-asserting, is the contract.
+US-1B landed the real candle `BertModel` backend and re-ran *this exact harness*
+with `all-MiniLM-L6-v2`. The standing hypothesis was that a learned embedder would
+rescue the NL-phrasing known-misses ("avoid reading the whole file into memory" →
+`mmap`). The measurement **refutes that for a natural-language model**: vector-only
+recall@5 dropped **0.083 → 0.000**, hybrid recall@5 0.458 → 0.417 — MiniLM is
+trained on English sentences, not code, so its nearest neighbors are noise for code
+queries. The forward-pass is correct (the paraphrase unit test passes); the model
+is the wrong kind. The open lever is a **code-trained** embedder (CodeBERT /
+nomic-embed-code / jina-code class), not a generic NL one — that is the OQ-3
+follow-up. (Still no live third-party tool comparison, by the same zero-network
+honesty rule.) See "Embedding backend status (honest)" below for the full result.
 
 ## Chunk-cap sweep (US-4)
 
@@ -303,18 +295,29 @@ regression guard for any future cap change.
 
 The default build ships **no model** and embeds via a deterministic feature-hash
 (`feature-hash-v1`). The pluggable `Embedder` trait, the user-supplied local-file
-load path, and the `meta` refuse-to-mix guard are all real and tested. The
-optional `gguf-embed` feature is the on-ramp for a real learned embedder, but in
-v0.5 its forward-pass is **deferred (1b)**: `GgufEmbedder::load` deliberately
-returns an error, so a `--features gguf-embed` build with a model file present
-falls back to feature-hash with a stderr warning rather than constructing a
-zero-vector embedder (proven by the `gguf-embed`-gated test
-`gguf_embed_build_refuses_zero_vector_embedder`). A `cargo tree` check asserts
-**zero ML crates** in both the default and `gguf-embed` builds, so the no-model
-guarantee is provable. The external-bench numbers above are exactly the evidence
-that motivates 1b: when the real safetensors backend lands (see
-`.omc/plans/open-questions.md` OQ-3), this harness is re-run at the pinned SHAs to
-prove or disprove a recall lift — it is not asserted here.
+load, and the `meta` refuse-to-mix guard are all real and tested.
+
+**1b landed (US-1B): the `gguf-embed` feature now runs a REAL candle `BertModel`
+forward-pass** (attention-masked mean-pool + L2-normalize) over a user-supplied
+local safetensors checkpoint — `std::fs` only, no network, no `hf-hub`. A
+`cargo tree -e normal` check asserts **zero ML crates** in BOTH the default and
+`--features gguf-embed` builds (candle/tokenizers are optional, feature-gated), so
+the no-model default stays provable. A unit test loads a real `all-MiniLM-L6-v2`
+and confirms the forward-pass is correct: paraphrases embed closer than unrelated
+text, vectors are L2-normalized, `embed` is deterministic. A missing/invalid model
+still falls back to feature-hash + a stderr warning (never panics, never fetches).
+
+**Measured result — a natural-language embedder does NOT lift code search.**
+Re-running the synthetic harness with `all-MiniLM-L6-v2` (a sentence-transformer
+trained on English NLI/paraphrase pairs, NOT code) made the vector side *worse*,
+not better: vector-only recall@5 went **0.083 (feature-hash) → 0.000 (MiniLM)**,
+hybrid recall@5 0.458 → 0.417. The forward-pass is correct (the paraphrase test
+passes); the model is simply the wrong tool — it maps English sentences, not code
+identifiers, so for code queries its nearest neighbors are noise. This is the
+honest *disprove* the plan asked for: the lever is not "any learned model" but a
+**code-trained embedder** (CodeBERT / nomic-embed-code / jina-code class). The
+infrastructure to plug one in now exists and is tested; trying a code embedder is
+the OQ-3 follow-up.
 
 ## Per-language cap validation (US-O5 / OQ-5)
 

@@ -12,10 +12,13 @@
 //! engine, and `rrf_proof.rs` plus every vector/dedup test stays green.
 //!
 //! A SECOND backend, [`GgufEmbedder`], is compiled ONLY behind the
-//! `gguf-embed` feature. It loads a USER-SUPPLIED local model file (never
-//! vendored, never downloaded by us — see the module-level note on the loader).
-//! With the feature OFF, none of its dependencies are pulled in and the
-//! model-weight scan stays 0.
+//! `gguf-embed` feature. It loads a USER-SUPPLIED local BERT checkpoint (a
+//! safetensors `sentence-transformers/all-MiniLM-L6-v2` directory; never
+//! vendored, never downloaded by us — see the loader doc) and runs a REAL
+//! candle `BertModel` forward-pass + attention-masked mean-pool + L2-normalize
+//! (US-1B). With the feature OFF, none of its ML dependencies
+//! (candle/tokenizers) are pulled in and the model-weight scan stays 0 — the
+//! `cargo tree -e normal` gate proves it.
 //!
 //! ## Active-embedder selection (runtime)
 //!
@@ -195,83 +198,189 @@ fn load_gguf_or_fallback(model_path: &str, dim: usize) -> Box<dyn Embedder> {
 // gguf-embed backend (feature-gated). Compiled ONLY with `--features gguf-embed`.
 // ---------------------------------------------------------------------------
 
-/// Local-model embedder loaded from a USER-SUPPLIED file.
+/// Local-model embedder running a REAL candle `BertModel` forward-pass (US-1B).
 ///
-/// ## What is wired vs. scaffolded (honest status)
+/// ## What this is (honest status)
 ///
-/// This struct OWNS the offline integration point: it loads the user-supplied
-/// local model file from disk with `std::fs` ONLY — there is NO network code on
-/// this path and no `hf-hub` dependency (web research 2026-06: candle and
-/// `safetensors` both load directly from a local path; `hf-hub` is only the
-/// optional downloader, which we do not use). The model file is ALWAYS supplied
-/// by the user via [`EMBED_MODEL_ENV`]; we never vendor or download it.
+/// This struct OWNS the offline inference path. It loads a USER-SUPPLIED local
+/// BERT checkpoint directory (a safetensors `all-MiniLM-L6-v2`: `config.json`,
+/// `tokenizer.json`, `model.safetensors`) from disk with `std::fs` / mmap ONLY —
+/// there is NO network code on this path and no `hf-hub` dependency (web research
+/// 2026-06: candle and `safetensors` both load directly from a local path;
+/// `hf-hub` is only the optional downloader, which we do not use). The checkpoint
+/// is ALWAYS supplied by the user via [`EMBED_MODEL_ENV`]; we never vendor or
+/// download it.
 ///
-/// The actual transformer forward-pass (candle BertModel / quantized GGUF) is an
-/// INTEGRATION POINT, not vendored inference: completing it requires picking the
-/// concrete architecture for the user's checkpoint and pulling `candle-core` /
-/// `candle-transformers` / `tokenizers`. Because we cannot vendor a model to
-/// test the real round-trip (that would itself break the no-model default), the inference
-/// body is deliberately a single clearly-marked stub returning a zero vector of
-/// the declared dim — never a panic. Everything AROUND it — the trait wiring, the
-/// local-file load, the meta refuse-to-mix check, and the fallback-on-error — is
-/// real and tested.
+/// [`GgufEmbedder::embed`] tokenizes the text, runs the candle `BertModel`
+/// forward-pass on the CPU, attention-masked-mean-pools the last hidden state,
+/// and L2-normalizes — fully deterministic. `Device::Cpu` keeps the build
+/// portable (no CUDA dep). Any load failure returns `Err` (never panics) so
+/// [`load_gguf_or_fallback`] degrades to the feature-hash embedder with a stderr
+/// warning; the zero-vector trap of v0.5 is gone because the real ctor only
+/// succeeds for a genuine, dim-matching checkpoint.
 #[cfg(feature = "gguf-embed")]
-#[derive(Debug)]
 pub struct GgufEmbedder {
     id: String,
     dim: usize,
-    #[allow(dead_code)] // Held for the inference integration point below.
-    model_bytes: Vec<u8>,
+    model: candle_transformers::models::bert::BertModel,
+    tokenizer: tokenizers::Tokenizer,
+    device: candle_core::Device,
+}
+
+#[cfg(feature = "gguf-embed")]
+impl std::fmt::Debug for GgufEmbedder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // BertModel / Tokenizer are large and not Debug-friendly; surface only the
+        // stable identity so logs stay readable.
+        f.debug_struct("GgufEmbedder")
+            .field("id", &self.id)
+            .field("dim", &self.dim)
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(feature = "gguf-embed")]
 impl GgufEmbedder {
-    /// Load a user-supplied local model file from `model_path`. Reads the file
-    /// from disk with `std::fs` — NO network, NO `hf-hub`.
+    /// Load a user-supplied local BERT checkpoint from `model_path`. `model_path`
+    /// may point at the `model.safetensors` FILE or at the checkpoint DIRECTORY;
+    /// either way the directory is resolved and `config.json` / `tokenizer.json` /
+    /// `model.safetensors` are read from it with `std::fs` / mmap — NO network, NO
+    /// `hf-hub`.
     ///
-    /// **A2 (v0.5): refuses to construct until the real forward-pass (1b) lands.**
-    /// [`GgufEmbedder::embed`] is still a zero-vector stub, so a constructed
-    /// `GgufEmbedder` would stamp an index `gguf:<stem>` whose every vector is
-    /// all-zero. [`crate::schema::verify_embedder_meta`] compares only `(id, dim)`,
-    /// so it would NOT catch that degradation: a same-feature build would reopen
-    /// the poisoned index and silently mis-rank. To keep that trap closed, `load`
-    /// returns an error until 1b implements real inference; the caller
-    /// ([`load_gguf_or_fallback`]) then falls back to the feature-hash embedder
-    /// with a stderr warning, so a zero-vector embedder is never constructed in
-    /// ANY build. The file is still read + validated here so the error is honest
-    /// about a missing/empty file vs. the deferred backend. Real inference is
-    /// deferred (see `.omc/plans/open-questions.md` OQ-3: a local safetensors
-    /// MiniLM-L6, dim 384, via `candle` `VarBuilder::from_mmaped_safetensors`).
+    /// Returns `Err` (never panics) on any failure — a missing/empty file, a
+    /// missing sibling, a parse error, or a `hidden_size != dim` mismatch (we
+    /// REFUSE a model whose dimension does not match the index DDL width
+    /// [`crate::storage::EMBED_DIM`]). The caller ([`load_gguf_or_fallback`]) then
+    /// falls back to the feature-hash embedder with a stderr warning, so no
+    /// degraded embedder is ever constructed.
+    ///
+    /// `id` is `gguf:<dir-stem>` so [`crate::schema::verify_embedder_meta`] refuses
+    /// to mix this backend's vectors with the feature-hash ones (or a different
+    /// checkpoint's) in the same index.
     pub fn load(model_path: &str, dim: usize) -> anyhow::Result<Self> {
         use anyhow::Context;
-        let model_bytes = std::fs::read(model_path)
-            .with_context(|| format!("read local embedding model file '{model_path}'"))?;
+        use candle_core::DType;
+        use candle_nn::VarBuilder;
+        use candle_transformers::models::bert::{BertModel, Config};
+
+        // Resolve the checkpoint DIRECTORY: accept either the .safetensors file or
+        // the directory itself.
+        let raw = std::path::Path::new(model_path);
+        let dir: std::path::PathBuf = if raw.is_dir() {
+            raw.to_path_buf()
+        } else {
+            raw.parent()
+                .map(|p| p.to_path_buf())
+                .with_context(|| format!("resolve checkpoint dir for '{model_path}'"))?
+        };
+
+        let config_path = dir.join("config.json");
+        let tokenizer_path = dir.join("tokenizer.json");
+        let weights_path = dir.join("model.safetensors");
+
+        // config.json -> candle bert Config (serde_json).
+        let config_file = std::fs::File::open(&config_path)
+            .with_context(|| format!("open bert config '{}'", config_path.display()))?;
+        let config: Config = serde_json::from_reader(std::io::BufReader::new(config_file))
+            .with_context(|| format!("parse bert config '{}'", config_path.display()))?;
+
+        // Refuse a model whose hidden_size does not match the index DDL width: a
+        // mismatched-dim checkpoint would write rows vec0 cannot store / query.
         anyhow::ensure!(
-            !model_bytes.is_empty(),
-            "embedding model file '{model_path}' is empty"
+            config.hidden_size == dim,
+            "embedding model '{model_path}' has hidden_size {} but the index requires dim {dim}; \
+             refusing to load a mismatched-dim model",
+            config.hidden_size
         );
-        // The id + bytes are exactly what 1b's real ctor will keep; reference them
-        // so the signature stays the real one while we refuse to build the stub.
-        let _ = (file_stem(model_path), dim, &model_bytes);
-        anyhow::bail!(
-            "gguf-embed forward-pass not implemented yet (deferred to 1b); refusing \
-             to construct a zero-vector embedder for '{model_path}'. Falling back to \
-             the built-in feature-hash embedder (no network fetch)."
-        )
+
+        // tokenizer.json -> tokenizers::Tokenizer.
+        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path).map_err(|e| {
+            anyhow::anyhow!("load tokenizer '{}': {e}", tokenizer_path.display())
+        })?;
+
+        // model.safetensors -> VarBuilder (mmaped, CPU, F32).
+        let device = candle_core::Device::Cpu;
+        // SAFETY: from_mmaped_safetensors mmaps the file read-only; the path is a
+        // user-supplied local checkpoint, read with no network.
+        let vb = unsafe {
+            VarBuilder::from_mmaped_safetensors(&[weights_path.clone()], DType::F32, &device)
+                .with_context(|| {
+                    format!("mmap safetensors weights '{}'", weights_path.display())
+                })?
+        };
+        let model = BertModel::load(vb, &config)
+            .map_err(|e| anyhow::anyhow!("build BertModel from '{}': {e}", weights_path.display()))?;
+
+        let id = format!("gguf:{}", dir_stem(&dir));
+        Ok(Self {
+            id,
+            dim,
+            model,
+            tokenizer,
+            device,
+        })
+    }
+
+    /// Run the candle BERT forward-pass for `text` and return the
+    /// attention-masked mean-pooled, L2-normalized embedding. Returns `Err` on any
+    /// tensor/tokenizer failure so [`GgufEmbedder::embed`] can degrade to a
+    /// zero-free deterministic fallback without panicking.
+    fn embed_inner(&self, text: &str) -> anyhow::Result<Vec<f32>> {
+        use candle_core::{DType, Tensor};
+
+        let encoding = self
+            .tokenizer
+            .encode(text, true)
+            .map_err(|e| anyhow::anyhow!("tokenize: {e}"))?;
+        let ids: Vec<u32> = encoding.get_ids().to_vec();
+        let mask: Vec<u32> = encoding.get_attention_mask().to_vec();
+        let n = ids.len();
+
+        // [1, n] batched tensors. token_type_ids are all-zero (single-segment).
+        let input_ids = Tensor::new(ids.as_slice(), &self.device)?.unsqueeze(0)?;
+        let attention_mask = Tensor::new(mask.as_slice(), &self.device)?.unsqueeze(0)?;
+        let token_type_ids = Tensor::zeros((1, n), DType::U32, &self.device)?;
+
+        // last_hidden_state: [1, n, hidden_size].
+        let hidden = self
+            .model
+            .forward(&input_ids, &token_type_ids, Some(&attention_mask))?;
+
+        // Attention-masked mean-pool over tokens, then L2-normalize — the canonical
+        // sentence-transformers pooling (matches the candle bert example).
+        let mask_f = attention_mask.to_dtype(DType::F32)?.unsqueeze(2)?; // [1, n, 1]
+        let sum_mask = mask_f.sum(1)?; // [1, 1]
+        let pooled = hidden.broadcast_mul(&mask_f)?.sum(1)?; // [1, hidden_size]
+        let pooled = pooled.broadcast_div(&sum_mask)?;
+        let normed = pooled.broadcast_div(&pooled.sqr()?.sum_keepdim(1)?.sqrt()?)?;
+
+        let v: Vec<f32> = normed.squeeze(0)?.to_vec1()?;
+        anyhow::ensure!(
+            v.len() == self.dim,
+            "embedding dim {} != expected {}",
+            v.len(),
+            self.dim
+        );
+        Ok(v)
     }
 }
 
 #[cfg(feature = "gguf-embed")]
 impl Embedder for GgufEmbedder {
-    fn embed(&self, _text: &str) -> Vec<f32> {
-        // INTEGRATION POINT (1b): run the candle forward pass + mean-pooling here.
-        // This body is currently UNREACHABLE: `GgufEmbedder::load` refuses to
-        // construct until 1b lands (A2), so no `GgufEmbedder` is ever built and
-        // this never runs. We keep a zero vector (NOT `unreachable!()`) to preserve
-        // the never-panic contract once 1b wires real inference. NOTE: the meta
-        // check (`verify_embedder_meta`) does NOT guard a zero-vector here — it
-        // compares only (id, dim); `load` returning Err is what closes the trap.
-        vec![0.0f32; self.dim]
+    fn embed(&self, text: &str) -> Vec<f32> {
+        // Never panic (the Embedder contract). On the rare tensor error, fall back
+        // to the deterministic feature-hash vector so a query still returns a
+        // usable, non-zero vector rather than crashing the indexer/server.
+        match self.embed_inner(text) {
+            Ok(v) => v,
+            Err(err) => {
+                eprintln!(
+                    "apohara-codesearch: gguf embed failed for one input ({err}); \
+                     using feature-hash for this text only"
+                );
+                crate::embeddings::feature_hash_embed(text, self.dim)
+            }
+        }
     }
     fn id(&self) -> &str {
         &self.id
@@ -281,11 +390,10 @@ impl Embedder for GgufEmbedder {
     }
 }
 
-/// File stem (no directory, no extension) used to tag a gguf embedder's id.
+/// Directory stem (final path component) used to tag a gguf embedder's id.
 #[cfg(feature = "gguf-embed")]
-fn file_stem(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_stem()
+fn dir_stem(path: &std::path::Path) -> String {
+    path.file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("model")
         .to_string()
@@ -374,37 +482,79 @@ mod tests {
         );
     }
 
-    /// A2 (the runnable guard): with the `gguf-embed` feature ON and a PRESENT,
-    /// non-empty model file, the engine must REFUSE to build a `GgufEmbedder`
-    /// (whose `embed` is a zero-vector stub) and fall back to feature-hash. This
-    /// proves the zero-vector trap is closed in the `gguf-embed` build, not only
-    /// the default build. CI runs `--all-features`, so this path is exercised.
+    /// US-1B real round-trip: with the `gguf-embed` feature ON and the local
+    /// MiniLM-L6 checkpoint present, the embedder loads, runs the candle BERT
+    /// forward-pass, and produces a sane sentence embedding. Skips gracefully when
+    /// the model dir is absent (so CI without the checkpoint still passes) — no
+    /// network, ever.
     #[cfg(feature = "gguf-embed")]
     #[test]
-    fn gguf_embed_build_refuses_zero_vector_embedder() {
-        use std::io::Write;
-        // A real, present, non-empty model file (the exact condition that would
-        // otherwise construct the zero-vector GgufEmbedder).
-        let path = std::env::temp_dir().join("apohara_a2_present_model.bin");
-        {
-            let mut f = std::fs::File::create(&path).unwrap();
-            f.write_all(b"non-empty bytes that are not a real checkpoint")
-                .unwrap();
+    fn gguf_embed_real_round_trip() {
+        // Where the one-time, OUTSIDE-the-repo checkpoint lives. Overridable so the
+        // test follows a relocated model, but never vendored.
+        let dir = std::env::var(EMBED_MODEL_ENV).unwrap_or_else(|_| {
+            "/home/thelinconx/apohara-models/all-MiniLM-L6-v2".to_string()
+        });
+        if !std::path::Path::new(&dir).join("model.safetensors").exists() {
+            eprintln!("skipping gguf_embed_real_round_trip: checkpoint not found at {dir}");
+            return;
         }
-        let p = path.to_str().unwrap();
 
-        // 1. load() refuses to construct even with the file present + non-empty.
+        let e = GgufEmbedder::load(&dir, EMBED_DIM)
+            .expect("the real MiniLM-L6 checkpoint must load under --features gguf-embed");
+        assert_eq!(e.dim(), EMBED_DIM);
+        assert!(e.id().starts_with("gguf:"), "id must be gguf:<stem>, got {}", e.id());
+
+        let cat = e.embed("the cat sat on the mat");
+
+        // NOT all-zero.
         assert!(
-            GgufEmbedder::load(p, EMBED_DIM).is_err(),
-            "gguf-embed load must refuse until the real forward-pass (1b) lands"
+            cat.iter().any(|&x| x != 0.0),
+            "real embed must not be an all-zero vector"
+        );
+        // L2-normalized: ||v|| ~= 1.0.
+        let norm = cat.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-3,
+            "embedding must be L2-normalized, got ||v|| = {norm}"
+        );
+        // Deterministic: two calls byte-identical.
+        assert_eq!(
+            cat,
+            e.embed("the cat sat on the mat"),
+            "gguf embed must be deterministic"
         );
 
-        // 2. the active path routes to feature-hash, never a gguf:* zero-vector.
-        let e = load_gguf_or_fallback(p, EMBED_DIM);
+        // Semantic signal: a paraphrase must be closer than an unrelated sentence.
+        let paraphrase = e.embed("a feline rested on the rug");
+        let unrelated = e.embed("compile the rust binary");
+        let cos = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+        let cos_para = cos(&cat, &paraphrase);
+        let cos_unrel = cos(&cat, &unrelated);
+        assert!(
+            cos_para > cos_unrel,
+            "paraphrase cos {cos_para} must exceed unrelated cos {cos_unrel}"
+        );
+    }
+
+    /// A MISSING model path under `--features gguf-embed` must STILL fall back to
+    /// the feature-hash embedder (no panic, no network), proving the loader degrades
+    /// gracefully when the user-configured checkpoint is absent.
+    #[cfg(feature = "gguf-embed")]
+    #[test]
+    fn gguf_embed_missing_model_falls_back() {
+        let missing = "/no/such/checkpoint/all-MiniLM-L6-v2";
+        // load() returns Err for an absent checkpoint (config.json open fails).
+        assert!(
+            GgufEmbedder::load(missing, EMBED_DIM).is_err(),
+            "absent checkpoint must error, not panic"
+        );
+        // The active fallback path routes to feature-hash, never a gguf:* embedder.
+        let e = load_gguf_or_fallback(missing, EMBED_DIM);
         assert_eq!(
             e.id(),
             FEATURE_HASH_ID,
-            "present model file must fall back to feature-hash, not gguf:*"
+            "missing model must fall back to feature-hash, not gguf:*"
         );
         let v = e.embed("anything");
         assert_eq!(
@@ -416,7 +566,5 @@ mod tests {
             v.iter().any(|&x| x != 0.0),
             "embed must never be an all-zero vector"
         );
-
-        let _ = std::fs::remove_file(&path);
     }
 }

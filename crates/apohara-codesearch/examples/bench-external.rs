@@ -45,7 +45,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use apohara_indexer::{
-    bm25_query, hydrate, index_repo, migrate, open_db, rrf_fuse, vector_query, HydratedHit,
+    active_embedder, bm25_query, hydrate, index_repo, migrate, open_db, rrf_fuse, vector_query_with,
+    HydratedHit, EMBED_DIM,
 };
 
 /// Env var pointing at the parent directory that holds the pre-cloned `ripgrep/`
@@ -702,6 +703,14 @@ fn measure(corpus: &Path, labels: &[Label]) -> Result<Measurement> {
         migrate(&conn).context("migrate temp index db")?;
         index_repo(&conn, corpus).context("index external corpus")?;
 
+        // Query with the SAME active embedder the index was built with. With the
+        // `gguf-embed` feature off / no model configured this is the feature-hash
+        // embedder (unchanged baseline); with the real model configured via
+        // APOHARA_EMBED_MODEL it is the candle BERT backend — so the vector column
+        // measures the REAL embedder's recall, not feature-hash queries against
+        // real-embedder vectors (which would be a meaningless mismatch).
+        let embedder = active_embedder(EMBED_DIM);
+
         let mut bm_ranks = Vec::with_capacity(labels.len());
         let mut ve_ranks = Vec::with_capacity(labels.len());
         let mut hy_ranks = Vec::with_capacity(labels.len());
@@ -722,7 +731,8 @@ fn measure(corpus: &Path, labels: &[Label]) -> Result<Measurement> {
 
         for label in labels {
             let bm = bm25_query(&conn, label.query, K).context("bm25_query")?;
-            let ve = vector_query(&conn, label.query, K).context("vector_query")?;
+            let ve = vector_query_with(&conn, label.query, K, embedder.as_ref())
+                .context("vector_query_with")?;
             let hy = rrf_fuse(&bm, &ve, apohara_indexer::RRF_K);
 
             let bm_ids: Vec<String> = bm.into_iter().map(|(id, _)| id).collect();

@@ -14,6 +14,13 @@ repository = "https://github.com/SuarezPM/apohara-codesearch"
 name = "apohara-codesearch"
 path = "src/main.rs"
 
+[features]
+# Pass-through to the indexer's optional real-embedder backend (US-1B). OFF by
+# default so the shipped binary stays zero-ML; the external bench enables it via
+# `cargo run --release --features gguf-embed --example bench-external` to measure
+# the real candle BERT embedder against the feature-hash baseline.
+gguf-embed = ["apohara-indexer/gguf-embed"]
+
 # NOTE: the benchmark harness lives at `examples/bench-search.rs`, NOT as a [[bin]].
 # Examples are never packaged into release archives by dist, so the release ships
 # exactly one executable (apohara-codesearch). Run it with
