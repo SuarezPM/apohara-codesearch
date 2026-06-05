@@ -371,6 +371,214 @@ const HUGO_LABELS: &[Label] = &[
     },
 ];
 
+/// TypeScript slice — microsoft/TypeScript, pinned SHA
+/// `6fbce89821d93a5b761581d9ac540455f38e9acb` (Apache-2.0). Indexed against the
+/// `src/` subtree only (so labels point at compiler/services SOURCE, not the
+/// `tests/` fixtures), hence `subdir = "TypeScript/src"` and label `file` paths
+/// are relative to `src/` (e.g. `compiler/checker.ts`). Same frozen
+/// `(file, target_line)` rule; target lines sit a few lines INSIDE the function
+/// body so any reasonable chunk boundary contains them.
+///
+/// `known_miss` is set from the MEASURED outcome at this SHA (relevant target
+/// out of the hybrid top-10, or found by only one mode), not a guess. On a 379k-LOC
+/// `src/` tree the feature-hash backend misses heavily: ubiquitous compiler tokens
+/// (`type`, `node`, `source`, `parse`, `module`, `flags`) saturate the corpus and
+/// bury the specific target. That is the honest signal this slice publishes.
+///
+/// 6 of 10 are known-miss (60%), far above the 30% floor.
+const TYPESCRIPT_LABELS: &[Label] = &[
+    // ---- Tool-wins: relevant target in the HYBRID top-10 (measured). ----
+    Label {
+        query: "getModuleSpecifiers import module specifier",
+        file: "compiler/moduleSpecifiers.ts",
+        symbol: "getModuleSpecifiers",
+        target_line: 366,
+        known_miss: false,
+        note: "identifier-aligned; bm=1, hy=1 (best win on the slice)",
+    },
+    Label {
+        query: "getCombinedModifierFlags declaration modifier",
+        file: "compiler/utilitiesPublic.ts",
+        symbol: "getCombinedModifierFlags",
+        target_line: 663,
+        known_miss: false,
+        note: "getCombinedModifierFlags named directly; bm=1, hy=2",
+    },
+    Label {
+        query: "createSourceMapGenerator add mapping",
+        file: "compiler/sourcemap.ts",
+        symbol: "createSourceMapGenerator",
+        target_line: 50,
+        known_miss: false,
+        note: "emit source map: createSourceMapGenerator named; bm=2, hy=3",
+    },
+    Label {
+        query: "parse jsx element or self closing tag",
+        file: "compiler/parser.ts",
+        symbol: "parseJsxElementOrSelfClosingElementOrFragment",
+        target_line: 6055,
+        known_miss: false,
+        note: "parse jsx element: parseJsxElement... aligns; bm=2, hy=3",
+    },
+    // ---- Known-miss (measured): relevant target OUT of hybrid top-10, or   ----
+    // ---- found by only one mode. Identifier-aligned phrasings that still   ----
+    // ---- miss because common tokens saturate a 379k-LOC src/ tree.         ----
+    Label {
+        query: "getCompletionsAtPosition completion entries",
+        file: "services/completions.ts",
+        symbol: "getCompletionsAtPosition",
+        target_line: 716,
+        known_miss: true,
+        note: "BM25-only finds it (bm=6); hybrid demotes it to rank 11, out of top-10",
+    },
+    Label {
+        query: "resolve module name with node module resolution",
+        file: "compiler/moduleNameResolver.ts",
+        symbol: "nodeModuleNameResolver",
+        target_line: 1790,
+        known_miss: true,
+        note: "BM25-only finds it (bm=7); hybrid demotes it to rank 13, out of top-10",
+    },
+    Label {
+        query: "type narrowing in control flow analysis getFlowTypeOfReference",
+        file: "compiler/checker.ts",
+        symbol: "getFlowTypeOfReference",
+        target_line: 29016,
+        known_miss: true,
+        note: "all modes miss: `type`/`flow`/`control` saturate the 50k-line checker.ts",
+    },
+    Label {
+        query: "scanNumber numeric literal token in the scanner",
+        file: "compiler/scanner.ts",
+        symbol: "scanNumber",
+        target_line: 1235,
+        known_miss: true,
+        note: "all modes miss: scanner.ts is one ~3k-line file, its chunks bury scanNumber",
+    },
+    // ---- Known-miss: NL paraphrases whose vocabulary does NOT overlap the   ----
+    // ---- code identifiers, so BOTH modes miss the target.                   ----
+    Label {
+        query: "figure out the real type of a variable after an if check",
+        file: "compiler/checker.ts",
+        symbol: "getFlowTypeOfReference",
+        target_line: 29016,
+        known_miss: true,
+        note: "NL paraphrase of control-flow narrowing: no `flow`/`narrow` token — both miss",
+    },
+    Label {
+        query: "build a file to position to file column translation table for debuggers",
+        file: "compiler/sourcemap.ts",
+        symbol: "createSourceMapGenerator",
+        target_line: 50,
+        known_miss: true,
+        note: "NL phrasing of source-map generation — no `sourcemap`/`mapping` token — both miss",
+    },
+];
+
+/// django slice — django/django, pinned SHA
+/// `a2348c85fc6c20087935c74cd99340dd4ef2dcdc` (BSD-3). Indexed against the
+/// `django/` package subtree (so labels point at framework SOURCE, not the
+/// `tests/` suite), hence `subdir = "django/django"` and label `file` paths are
+/// relative to that package (e.g. `urls/resolvers.py`, `db/models/query.py`).
+/// Same frozen `(file, target_line)` rule; target lines sit a few lines INSIDE
+/// the method body.
+///
+/// `known_miss` is set from the MEASURED outcome at this SHA. Django's
+/// `query.py`/`resolvers.py`/`csrf.py` reuse common tokens (`request`, `path`,
+/// `field`, `clean`, `resolve`) heavily, so a few identifier-aligned queries
+/// still bury the target on a 141k-LOC package, and every NL paraphrase misses.
+///
+/// 4 of 10 are known-miss (40%), above the 30% floor. (Django labels land more
+/// often than the TS/Rust slices because django's method names are distinctive
+/// and its source files are smaller than checker.ts/scanner.ts — the honest
+/// per-language spread the soak predicts.)
+const DJANGO_LABELS: &[Label] = &[
+    // ---- Tool-wins: relevant target in the HYBRID top-10 (measured). ----
+    Label {
+        query: "url routing resolver match path against patterns",
+        file: "urls/resolvers.py",
+        symbol: "URLResolver.resolve",
+        target_line: 675,
+        known_miss: false,
+        note: "URLResolver.resolve + path + patterns align; bm=5, hy=9",
+    },
+    Label {
+        query: "turn a plain text password into a salted hash",
+        file: "contrib/auth/hashers.py",
+        symbol: "make_password",
+        target_line: 110,
+        known_miss: false,
+        note: "make_password docstring 'plain-text password into a hash'; bm=1, hy=1",
+    },
+    Label {
+        query: "queryset iterator over database results in chunks",
+        file: "db/models/query.py",
+        symbol: "QuerySet.iterator",
+        target_line: 567,
+        known_miss: false,
+        note: "QuerySet.iterator + chunk_size align; bm=4, hy=7",
+    },
+    Label {
+        query: "queryset lazy evaluation fetch all results cache",
+        file: "db/models/query.py",
+        symbol: "QuerySet._fetch_all",
+        target_line: 2239,
+        known_miss: false,
+        note: "_fetch_all + _result_cache align; bm=3, hy=5",
+    },
+    Label {
+        query: "send a signal to all connected receivers",
+        file: "dispatch/dispatcher.py",
+        symbol: "Signal.send",
+        target_line: 240,
+        known_miss: false,
+        note: "Signal.send docstring 'send signal to all connected receivers'; bm=1, hy=1",
+    },
+    Label {
+        query: "tokenize a template into tokens",
+        file: "template/base.py",
+        symbol: "Lexer.tokenize",
+        target_line: 425,
+        known_miss: false,
+        note: "Lexer.tokenize + token align; bm=4, hy=7",
+    },
+    // ---- Known-miss (measured): relevant target OUT of hybrid top-10, or    ----
+    // ---- found by only one mode.                                            ----
+    Label {
+        query: "csrf middleware process view token check",
+        file: "middleware/csrf.py",
+        symbol: "CsrfViewMiddleware.process_view",
+        target_line: 420,
+        known_miss: true,
+        note: "BM25-only finds it (bm=9); hybrid demotes it to rank 17, out of top-10",
+    },
+    Label {
+        query: "detect changes between migration states autodetector",
+        file: "db/migrations/autodetector.py",
+        symbol: "MigrationAutodetector._detect_changes",
+        target_line: 135,
+        known_miss: true,
+        note: "all modes miss: `_detect_changes` is buried under other autodetector chunks",
+    },
+    // ---- Known-miss: NL paraphrases that miss the Python identifiers. ----
+    Label {
+        query: "check that a form's fields are all valid",
+        file: "forms/forms.py",
+        symbol: "Form._clean_fields",
+        target_line: 348,
+        known_miss: true,
+        note: "NL paraphrase of _clean_fields — no `clean`/`field` co-token win — both miss",
+    },
+    Label {
+        query: "stream rows from the db without loading them all into memory",
+        file: "db/models/query.py",
+        symbol: "QuerySet.iterator",
+        target_line: 567,
+        known_miss: true,
+        note: "NL phrasing of server-side cursor iteration — both modes miss",
+    },
+];
+
 /// The slices measured by this harness, in report order.
 const SLICES: &[Slice] = &[
     Slice {
@@ -382,6 +590,16 @@ const SLICES: &[Slice] = &[
         name: "hugo (Go)",
         subdir: "hugo",
         labels: HUGO_LABELS,
+    },
+    Slice {
+        name: "TypeScript",
+        subdir: "TypeScript/src",
+        labels: TYPESCRIPT_LABELS,
+    },
+    Slice {
+        name: "django",
+        subdir: "django/django",
+        labels: DJANGO_LABELS,
     },
 ];
 
@@ -400,15 +618,22 @@ fn main() -> Result<()> {
     };
     let root = PathBuf::from(root);
 
+    let mut measured_any = false;
     for slice in SLICES {
         let corpus = root.join(slice.subdir);
         if !corpus.is_dir() {
-            anyhow::bail!(
-                "slice '{}' corpus not found at {} — clone it there first (one-time manual prereq)",
+            // A missing corpus is a SKIP, not a failure: the slices are cloned
+            // independently (ripgrep/hugo for US-4, TypeScript/django for US-O5),
+            // so a run with only some of them present must still measure those.
+            // Same spirit as the unset-env branch — never hard-fail a partial tree.
+            eprintln!(
+                "skipping slice '{}': corpus not found at {} (clone it there to measure it)",
                 slice.name,
                 corpus.display()
             );
+            continue;
         }
+        measured_any = true;
 
         // Determinism gate: measure twice, require byte-identical metrics before
         // printing — same contract as bench-search.rs.
@@ -424,6 +649,13 @@ fn main() -> Result<()> {
 
         print_report(slice.name, &first);
         println!();
+    }
+
+    if !measured_any {
+        eprintln!(
+            "no slice corpus found under {} — clone at least one of the slice subdirs first",
+            root.display()
+        );
     }
 
     Ok(())
@@ -640,11 +872,14 @@ mod tests {
         }
     }
 
-    /// ripgrep slice is ~20-25 queries; hugo slice is ≥8 (US-2 acceptance).
+    /// ripgrep slice is ~20-25 queries; hugo ≥8 (US-2); TypeScript + django ≥8
+    /// each (US-O5 acceptance).
     #[test]
     fn slice_sizes_match_plan() {
         let ripgrep = SLICES.iter().find(|s| s.subdir == "ripgrep").unwrap();
         let hugo = SLICES.iter().find(|s| s.subdir == "hugo").unwrap();
+        let typescript = SLICES.iter().find(|s| s.subdir == "TypeScript/src").unwrap();
+        let django = SLICES.iter().find(|s| s.subdir == "django/django").unwrap();
         assert!(
             (20..=25).contains(&ripgrep.labels.len()),
             "ripgrep slice has {} labels, expected 20-25",
@@ -654,6 +889,16 @@ mod tests {
             hugo.labels.len() >= 8,
             "hugo slice has {} labels, expected >= 8",
             hugo.labels.len()
+        );
+        assert!(
+            typescript.labels.len() >= 8,
+            "TypeScript slice has {} labels, expected >= 8",
+            typescript.labels.len()
+        );
+        assert!(
+            django.labels.len() >= 8,
+            "django slice has {} labels, expected >= 8",
+            django.labels.len()
         );
     }
 

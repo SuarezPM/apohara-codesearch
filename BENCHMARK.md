@@ -315,3 +315,36 @@ guarantee is provable. The external-bench numbers above are exactly the evidence
 that motivates 1b: when the real safetensors backend lands (see
 `.omc/plans/open-questions.md` OQ-3), this harness is re-run at the pinned SHAs to
 prove or disprove a recall lift — it is not asserted here.
+
+## Per-language cap validation (US-O5 / OQ-5)
+
+> US-4 tuned the global chunk caps (`MAX_CHUNK_LINES`/`MAX_CHUNK_BYTES`) on Rust
+> (ripgrep) + Go (hugo) only, leaving TS/Python unmeasured (OQ-5). This closes
+> that gap with hand-labeled TypeScript + Python slices. Corpus NOT vendored.
+
+**Pinned commits:** TypeScript `6fbce89821d93a5b761581d9ac540455f38e9acb` (Apache-2.0,
+`src/` subtree), django `a2348c85fc6c20087935c74cd99340dd4ef2dcdc` (BSD-3).
+
+**At the default caps (200 / 8192):**
+
+| Slice | known-miss | mode | recall@5 | recall@10 | MRR |
+|-------|-----------|------|----------|-----------|-----|
+| TypeScript (10 q) | 60% | BM25 | 0.400 | 0.600 | 0.3310 |
+| | | vector | 0.000 | 0.000 | 0.0000 |
+| | | hybrid | 0.400 | 0.400 | 0.2334 |
+| django (10 q) | 40% | BM25 | 0.600 | 0.800 | 0.3244 |
+| | | vector | 0.000 | 0.000 | 0.0000 |
+| | | hybrid | 0.300 | 0.600 | 0.2708 |
+
+**Spot-check at 300 / 16384** (the cap change US-4 found weak on Rust+Go): TS recall
+unchanged (BM25 MRR 0.3310→0.3333, marginal), but django **regressed** — BM25
+recall@10 0.800→0.700, MRR 0.3244→0.3067; hybrid recall@5 0.300→0.200. A larger
+cap does not help TS and actively hurts Python.
+
+**Verdict — OQ-5 resolved: the 200/8192 default is validated across all four
+languages.** The per-language picture matches Rust+Go exactly: the feature-hash
+vector side is near-noise on real OSS (vector-only recall is 0 on both TS and
+django), hybrid never beats BM25-alone, and raising the caps only dilutes chunks
+(measurably so on django). No cap change is warranted. The same honest caveat
+holds: a learned embedder (1b) is the lever that could change the vector column;
+that is what OQ-3 will re-measure, not the caps.

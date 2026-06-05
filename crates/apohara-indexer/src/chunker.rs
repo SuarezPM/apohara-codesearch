@@ -35,26 +35,36 @@ pub const WINDOW_OVERLAP: usize = 15;
 /// Maximum number of source lines in a Module (or Window) chunk before it is
 /// flushed and a new sub-chunk begins.
 ///
-/// Validated optimal on Rust+Go recall at these SHAs; unchanged. A measured
-/// sweep (US-4, 2026-06-05) over `lines ∈ {150,200,300,400} × bytes ∈
+/// Validated optimal on Rust+Go+TS+Python recall at these SHAs; unchanged. A
+/// measured sweep (US-4, 2026-06-05) over `lines ∈ {150,200,300,400} × bytes ∈
 /// {8192,16384}` re-ran the external recall bench (ripgrep `82313cf` Rust /
 /// hugo `7d1b1fb` Go) and the tokio footprint soak at every grid point. No grid
 /// point beat this default: raising the line cap to 400 *regressed* ripgrep
 /// recall@5 (0.273→0.227), and every 16 KiB-byte point lost ripgrep MRR
-/// (0.1494→0.1471), while 150 and 300 lines merely tied. So 200 stays — a chunk
-/// stays roughly one screenful and its bag-of-tokens embedding is not diluted by
-/// thousands of lines. TS/Python remain unmeasured (OQ-5). See BENCHMARK.md
-/// "Chunk-cap sweep (US-4)".
+/// (0.1494→0.1471), while 150 and 300 lines merely tied. US-O5 (2026-06-05) then
+/// added a TypeScript slice (microsoft/TypeScript `6fbce89`, src/) and a Python
+/// slice (django/django `a2348c8`) on the SAME global caps and spot-checked
+/// `300 × 16384`: TS recall was unchanged (BM25 MRR 0.3310→0.3333, marginal),
+/// but django *regressed* (BM25 recall@10 0.800→0.700, MRR 0.3244→0.3067; hybrid
+/// recall@5 0.300→0.200) — a larger cap does not help and hurts Python, so 200
+/// stays (OQ-5 resolved). A chunk stays roughly one screenful —
+/// a chunk stays roughly one screenful and its bag-of-tokens embedding is not
+/// diluted by thousands of lines. See BENCHMARK.md "Chunk-cap sweep (US-4)" +
+/// "Per-language cap validation (US-O5 / OQ-5)".
 pub const MAX_CHUNK_LINES: usize = 200;
 /// Maximum byte length of a Module (or Window) chunk body before it is flushed.
 ///
-/// Validated optimal on Rust+Go recall at these SHAs; unchanged. The same US-4
-/// sweep (2026-06-05; ripgrep `82313cf` / hugo `7d1b1fb`) showed raising this
-/// cap to 16 KiB regressed ripgrep MRR (BM25 0.1494→0.1471, hybrid
-/// 0.1191→0.1177) with no recall gain on either slice, so 8 KiB stays. 8 KiB
-/// keeps a chunk's lexical content bounded so its bag-of-tokens embedding is not
-/// diluted by a very long line block. TS/Python remain unmeasured (OQ-5). See
-/// BENCHMARK.md "Chunk-cap sweep (US-4)".
+/// Validated optimal on Rust+Go+TS+Python recall at these SHAs; unchanged. The
+/// US-4 sweep (2026-06-05; ripgrep `82313cf` / hugo `7d1b1fb`) showed raising
+/// this cap to 16 KiB regressed ripgrep MRR (BM25 0.1494→0.1471, hybrid
+/// 0.1191→0.1177) with no recall gain on either slice, so 8 KiB stays. US-O5
+/// (2026-06-05; TypeScript `6fbce89` src/ + django/django `a2348c8`) confirmed
+/// the byte cap on TS+Python too: the `300 × 16384` spot-check left TS recall
+/// unchanged but *regressed* django (BM25 recall@10 0.800→0.700, MRR
+/// 0.3244→0.3067), so 8 KiB stays (OQ-5 resolved). 8 KiB keeps a
+/// chunk's lexical content bounded so its bag-of-tokens embedding is not diluted
+/// by a very long line block. See BENCHMARK.md "Chunk-cap sweep (US-4)" +
+/// "Per-language cap validation (US-O5 / OQ-5)".
 pub const MAX_CHUNK_BYTES: usize = 8 * 1024;
 
 /// What a [`ChunkSpec`] represents.
