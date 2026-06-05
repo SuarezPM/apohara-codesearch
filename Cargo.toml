@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/apohara-indexer",
+    "crates/apohara-codesearch",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Pablo M. Suarez <suarezpm@csnat.unt.edu.ar>"]
+
+# Single source of version truth for deps shared across workspace crates.
+# Versions are pinned to match the upstream apohara-indexer soft-fork source.
+[workspace.dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+# rusqlite "bundled" statically compiles SQLite + extension support;
+# "load_extension" enables sqlite3_auto_extension via ffi (see
+# storage.rs::ensure_vec_extension_registered).
+rusqlite = { version = "0.32", features = ["bundled", "load_extension"] }
+sqlite-vec = "0.1"
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-go = "0.23"
+blake3 = "1.5"
+dirs = "6.0"
+ignore = "0.4"
+
+# The profile that 'dist' builds release artifacts with. dist init emits this
+# alongside the metadata table below; the release workflow's `dist build` reads
+# it. Inherits release; thin LTO trims the static SQLite + tree-sitter blobs.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+# Config for 'dist'
+[workspace.metadata.dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.32.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = []
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
+# Cross-compile the Windows MSVC target via cargo-xwin inside the maintained
+# messense/cargo-xwin container (cc-built bundled SQLite links the MSVC CRT
+# headers/libs xwin provisions). aarch64-linux needs no custom runner — dist
+# selects cargo-zigbuild for it automatically.
+[workspace.metadata.dist.github-custom-runners.x86_64-pc-windows-msvc]
+container = "messense/cargo-xwin"

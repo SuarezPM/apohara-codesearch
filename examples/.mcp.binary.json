@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "codesearch": {
+      "command": "apohara-codesearch",
+      "args": ["serve"],
+      "env": {}
+    }
+  }
+}

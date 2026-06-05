@@ -1,0 +1,45 @@
+# CI: lint, format, and test on every PR and on pushes to main.
+# This is a SEPARATE lane from release.yml, which owns dist build/host/release.
+# Here we only run fmt/clippy/test plus a `dist plan` sanity check (no build).
+name: CI
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      # --all-features so the opt-in surfaces are covered too: the `bench`
+      # feature (bench-search dev binary) and the `gguf-embed` feature. The
+      # default-feature shipping config is exercised by release.yml's dist build.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      # --all-targets so the bench-search EXAMPLE's tests run too; --all-features
+      # for the gguf-embed opt-in surface.
+      - name: Test
+        run: cargo test --workspace --all-targets --all-features
+
+      - name: Install dist
+        # bash gives us pipefail so a failing curl is caught (matches release.yml)
+        shell: bash
+        run: "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh"
+
+      - name: dist plan
+        run: dist plan

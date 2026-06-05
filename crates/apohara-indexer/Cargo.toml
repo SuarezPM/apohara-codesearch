@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "apohara-indexer"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "apohara_indexer"
+path = "src/lib.rs"
+
+[features]
+# OFF by default (the default build ships no model). When enabled, compiles the
+# feature-gated `GgufEmbedder` in `embedder.rs`, which loads a USER-SUPPLIED
+# local model file from disk (std::fs only — NO network, NO hf-hub). The actual
+# transformer forward-pass is an integration point (see the GgufEmbedder doc):
+# completing it pulls candle-core/candle-transformers/tokenizers as OPTIONAL,
+# feature-gated deps so the DEFAULT build keeps zero ML/model crates and the
+# model-weight scan stays 0. Web research (2026-06): candle + safetensors both
+# load directly from a local path; the real offline embedding path is a local
+# safetensors BERT checkpoint (pure-Rust GGUF *embedding* inference is largely
+# unimplemented upstream — this is why the name is the only "gguf" part for now).
+gguf-embed = []
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+# rusqlite "bundled" statically compiles SQLite + extension support;
+# "load_extension" enables sqlite3_auto_extension via ffi (see
+# storage.rs::ensure_vec_extension_registered).
+rusqlite = { workspace = true }
+sqlite-vec = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-go = { workspace = true }
+blake3 = { workspace = true }
+dirs = { workspace = true }
+# `ignore` powers the later walker (gitignore-aware filesystem traversal).
+ignore = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

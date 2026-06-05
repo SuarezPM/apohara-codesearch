@@ -1,0 +1,30 @@
+apohara-codesearch
+Copyright 2026 Pablo M. Suárez
+
+Licensed under the MIT License OR the Apache License, Version 2.0, at your
+option. See LICENSE-MIT and LICENSE-APACHE.
+
+================================================================================
+Provenance
+================================================================================
+
+The files crates/apohara-indexer/src/{storage.rs, parser.rs, embeddings.rs}
+originate from the author's Apohara-Catalyst repository — same author, same
+MIT OR Apache-2.0 license.
+
+================================================================================
+Third-party dependencies
+================================================================================
+
+This project links against the following crates, each under its own license
+(consult each crate for full terms):
+
+  - tree-sitter             (MIT)
+  - tree-sitter-rust        (MIT)
+  - tree-sitter-typescript  (MIT)
+  - tree-sitter-python      (MIT)
+  - tree-sitter-go          (MIT)
+  - rusqlite                (MIT)
+  - sqlite-vec              (MIT OR Apache-2.0)
+  - blake3                  (CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception)
+  - notify                  (CC0-1.0 OR Artistic-2.0)

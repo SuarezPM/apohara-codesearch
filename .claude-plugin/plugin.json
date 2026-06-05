@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "apohara-codesearch",
+  "displayName": "Apohara Codesearch",
+  "version": "0.1.0",
+  "description": "Zero-dependency, fully offline hybrid code search as one Rust binary. No model download, no database service, runs air-gapped. Two MCP tools: search_code and reindex.",
+  "author": {
+    "name": "Pablo M. Suárez"
+  },
+  "homepage": "https://github.com/SuarezPM/apohara-codesearch",
+  "repository": "https://github.com/SuarezPM/apohara-codesearch",
+  "license": "MIT OR Apache-2.0",
+  "keywords": [
+    "code-search",
+    "mcp",
+    "offline",
+    "bm25",
+    "rrf",
+    "rust"
+  ],
+  "mcpServers": "./.mcp.json"
+}

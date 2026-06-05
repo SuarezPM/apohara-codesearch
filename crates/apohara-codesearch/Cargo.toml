@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "apohara-codesearch"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+# Required by dist (cargo-dist) for the GitHub CI backend: it derives the
+# Release upload target from this URL.
+repository = "https://github.com/SuarezPM/apohara-codesearch"
+
+[[bin]]
+name = "apohara-codesearch"
+path = "src/main.rs"
+
+# NOTE: the benchmark harness lives at `examples/bench-search.rs`, NOT as a [[bin]].
+# Examples are never packaged into release archives by dist, so the release ships
+# exactly one executable (apohara-codesearch). Run it with
+# `cargo run --release --example bench-search`; its tests run under
+# `cargo test --all-targets`.
+
+[dependencies]
+# Reused indexing/search engine (lib-only soft-fork). Provides open_db, migrate,
+# index_repo, reindex, bm25_query, vector_query, rrf_fuse, hydrate, RRF_K, and
+# the sqlite_version() helper used by the --sqlite-version gate.
+apohara-indexer = { path = "../apohara-indexer" }
+
+# rmcp 1.x official Rust MCP SDK. Features:
+#   server        — ServerHandler, ToolRouter, tool macros
+#   transport-io  — stdio transport (rmcp::transport::stdio)
+#   macros        — #[tool_router] / #[tool] / #[tool_handler]
+#   schemars      — JsonSchema derive integration for tool input schemas
+rmcp = { version = "1", features = ["server", "transport-io", "macros", "schemars"] }
+schemars = "1"
+
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = "1.0"
+
+# Cross-platform filesystem notifications for the `watch` subcommand. 8.x is the
+# current stable major (inotify on Linux, FSEvents/kqueue on macOS,
+# ReadDirectoryChangesW on Windows). Used via recommended_watcher + a manual
+# debounce window (WATCH_DEBOUNCE_MS) — no separate debouncer crate needed.
+notify = "8"
+
+# Current-thread tokio runtime only: rt (single-threaded scheduler), io-std
+# (stdin/stdout handles), io-util (AsyncRead/Write ext used by the io transport),
+# net (pulls in the IO reactor/driver that `enable_io()` and async stdin/stdout
+# require — io-std alone provides the handles but not the driver), time (rmcp's
+# service loop arms Tokio timers), macros (select! used internally). NO
+# "rt-multi-thread": the current-thread scheduler keeps resident memory minimal.
+tokio = { version = "1", default-features = false, features = ["rt", "io-std", "io-util", "net", "time", "macros"] }
+
+[dev-dependencies]
+# Temp repos for the watch integration test (matches apohara-indexer's tests).
+tempfile = "3"

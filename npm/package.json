@@ -1,0 +1,38 @@
+{
+  "name": "@apohara/codesearch-mcp",
+  "version": "0.1.0",
+  "description": "stdio MCP server wrapper for apohara-codesearch: hybrid (BM25 + vector) local code search exposed over the Model Context Protocol. Downloads the matching prebuilt binary from the GitHub Release on install.",
+  "bin": {
+    "apohara-codesearch-mcp": "bin/cli.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "bin/",
+    "install.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT OR Apache-2.0",
+  "author": "Pablo M. Suarez <suarezpm@csnat.unt.edu.ar>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SuarezPM/apohara-codesearch.git"
+  },
+  "homepage": "https://github.com/SuarezPM/apohara-codesearch#readme",
+  "bugs": {
+    "url": "https://github.com/SuarezPM/apohara-codesearch/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "code-search",
+    "rag",
+    "bm25",
+    "vector-search",
+    "sqlite",
+    "stdio"
+  ]
+}

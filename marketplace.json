@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "apohara",
+  "owner": {
+    "name": "Pablo M. Suárez"
+  },
+  "description": "Apohara tools for coding agents.",
+  "plugins": [
+    {
+      "name": "apohara-codesearch",
+      "source": "./",
+      "description": "Zero-dependency, fully offline hybrid code search as one Rust binary. No model download, no database service, runs air-gapped. Two MCP tools: search_code and reindex.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Pablo M. Suárez"
+      },
+      "homepage": "https://github.com/SuarezPM/apohara-codesearch",
+      "license": "MIT OR Apache-2.0",
+      "keywords": [
+        "code-search",
+        "mcp",
+        "offline",
+        "bm25",
+        "rrf",
+        "rust"
+      ],
+      "category": "developer-tools",
+      "tags": [
+        "code-search",
+        "mcp",
+        "offline"
+      ]
+    }
+  ]
+}

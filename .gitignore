@@ -1,0 +1,11 @@
+# Rust build output
+/target
+
+# npm wrapper: the downloaded binary + node deps
+npm/bin/apohara-codesearch
+npm/bin/apohara-codesearch.exe
+npm/node_modules/
+
+# OS / editor cruft
+.DS_Store
+*.swp
