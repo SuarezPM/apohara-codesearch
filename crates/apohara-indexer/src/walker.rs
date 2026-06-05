@@ -26,6 +26,17 @@ use crate::parser::{detect_language, Language};
 /// minified bundles that pollute the index without adding searchable signal.
 pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
 
+/// Longest single line (in bytes) the walker tolerates before treating a file as
+/// generated/minified and skipping it. Real source lines almost never exceed a
+/// few hundred bytes; a multi-KB line is the signature of minified JS/CSS, a
+/// generated bundle, or an embedded data blob — index noise that the
+/// [`MAX_FILE_BYTES`] cap misses, because a minified asset is often well under
+/// 1 MiB yet collapses to a handful of enormous lines (e.g. hugo's
+/// `renderkatex.bundle.js`: 277 KB across ~36 lines). Such a line would otherwise
+/// become an oversized chunk whose body is stored whole, bloating the DB without
+/// adding searchable signal. Tunable.
+pub const MAX_LINE_BYTES: usize = 4096;
+
 /// The index's own working directory, relative to the repo root. Self-excluded
 /// from traversal so we never index our own database/state.
 const SELF_DIR: &str = ".apohara-codesearch";
@@ -114,6 +125,15 @@ pub fn walk_repo(root: &Path) -> Vec<WalkedFile> {
             Ok(s) => s,
             Err(_) => continue,
         };
+
+        // Skip generated/minified assets: a single line longer than
+        // [`MAX_LINE_BYTES`] is the signature of minified JS/CSS, a generated
+        // bundle, or an embedded data blob. Indexing them stores a multi-KB blob
+        // as one oversized chunk body — DB bloat with no searchable source signal.
+        // This is narrower and earlier than the [`MAX_FILE_BYTES`] size gate.
+        if content.lines().any(|line| line.len() > MAX_LINE_BYTES) {
+            continue;
+        }
 
         let language = detect_language(path);
 
@@ -209,5 +229,25 @@ mod tests {
 
         let rels: Vec<String> = walk_repo(root).into_iter().map(|f| f.rel_path).collect();
         assert_eq!(rels, vec!["ok.rs".to_string()]);
+    }
+
+    #[test]
+    fn test_walk_repo_skips_minified_long_lines() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        // A "minified" asset: one enormous line, well under MAX_FILE_BYTES but
+        // pure noise (mirrors hugo's renderkatex.bundle.js / livereload.min.js).
+        let minified = format!("var x = \"{}\";\n", "a".repeat(MAX_LINE_BYTES * 4));
+        assert!((minified.len() as u64) < MAX_FILE_BYTES, "fixture stays under the size cap");
+        fs::write(root.join("bundle.min.js"), &minified).unwrap();
+        // A normal source file with short lines must still be indexed.
+        fs::write(root.join("ok.rs"), "fn ok() {}\nfn two() {}\n").unwrap();
+
+        let rels: Vec<String> = walk_repo(root).into_iter().map(|f| f.rel_path).collect();
+        assert_eq!(
+            rels,
+            vec!["ok.rs".to_string()],
+            "the minified one-liner must be skipped; normal source kept"
+        );
     }
 }
