@@ -222,3 +222,79 @@ NL queries BM25 cannot serve — which is precisely the case where RRF should ad
 recall instead of taxing it. The claim is **not asserted here**: the way to check
 it is to land US-1's real backend and re-run *this exact harness* at the same
 pinned SHAs. Re-running, not re-asserting, is the contract.
+
+## Chunk-cap sweep (US-4)
+
+> A measured sweep of the two GLOBAL chunk caps `MAX_CHUNK_LINES` /
+> `MAX_CHUNK_BYTES` (`crates/apohara-indexer/src/chunker.rs:43`/`:49`), applied to
+> all four languages via `chunk_file` → `split_module_run`. The ONLY legitimate
+> inputs are the recall/MRR from the external bench above and the footprint from
+> the soak above. This is a measured nudge, not a search.
+
+**Method.** For each grid point, both consts were edited, `cargo build --release`
+re-run, the external recall bench re-run on BOTH slices (ripgrep Rust `82313cf` +
+hugo Go `7d1b1fb`), and the tokio footprint soak re-run (cold force-index, peak
+RSS via `/usr/bin/time -v`, DB-on-disk via `stat`). Recall columns are the
+**hybrid (RRF)** mode (the tool's actual ranking); the ripgrep **BM25 MRR** is
+also tracked because it is the most sensitive metric to a boundary shift. The
+acceptance rule: a grid point is only eligible if it does **not** regress
+recall@5/@10/MRR on EITHER slice AND keeps DB-on-disk + peak RSS within +10% of
+the (200/8192) baseline. Measured on a Ryzen 5 3600 / 46 GB box, default
+(feature-hash) embedder.
+
+**Baseline (200 / 8192):** ripgrep hybrid r@5=0.227 r@10=0.273 MRR=0.1191
+(BM25 MRR 0.1494); hugo hybrid r@5=0.222 r@10=0.222 MRR=0.2389; tokio peak RSS
+21 896 KB, DB 40 607 744 B (38.7 MiB), 16 400 chunks. +10% ceilings: RSS
+≤ 24 086 KB, DB ≤ 44 668 518 B.
+
+| lines × bytes | rg hybrid r@5 | rg hybrid r@10 | rg hybrid MRR | rg BM25 MRR | hugo hybrid r@5 | hugo hybrid r@10 | hugo hybrid MRR | tokio RSS (KB) | tokio DB (B) | chunks | verdict |
+|---------------|---------------|----------------|---------------|-------------|-----------------|------------------|-----------------|----------------|--------------|--------|---------|
+| **200 × 8192 (baseline)** | 0.227 | 0.273 | 0.1191 | **0.1494** | 0.222 | 0.222 | 0.2389 | 21 896 | 40 607 744 | 16 400 | — (reference) |
+| 150 × 8192 | 0.227 | 0.273 | 0.1191 | **0.1494** | 0.222 | 0.222 | 0.2389 | 21 736 | 40 562 688 | 16 452 | recall TIE, no gain |
+| 300 × 8192 | 0.227 | 0.273 | 0.1191 | **0.1494** | 0.222 | 0.222 | 0.2389 | 21 876 | 38 989 824 | 16 383 | recall TIE, no gain |
+| 200 × 16384 | 0.227 | 0.273 | 0.1177 | 0.1471 | 0.222 | 0.222 | 0.2389 | 22 140 | 40 607 744 | 16 397 | **MRR REGRESS (rg)** |
+| 300 × 16384 | 0.227 | 0.273 | 0.1177 | 0.1471 | 0.222 | 0.222 | 0.2389 | 21 940 | 38 952 960 | 16 353 | **MRR REGRESS (rg)** |
+| 400 × 16384 | 0.227 | 0.227 | 0.1168 | 0.1456 | 0.222 | 0.222 | 0.2389 | 22 056 | 38 936 576 | 16 335 | **recall@10 + MRR REGRESS (rg)** |
+
+**Outcome: NO CHANGE — the (200, 8192) default is measured-optimal (OQ-4).**
+Reading the table:
+
+- **No grid point beats the baseline on recall.** The two points that do not
+  regress (150 × 8192 and 300 × 8192) reproduce the baseline recall byte-for-byte
+  on both slices — they tie, they never win. The bytes-cap-raising points
+  (16384) all *lose* ripgrep MRR (hybrid 0.1191 → 0.1177, BM25 0.1494 → 0.1471):
+  a 16 KiB module chunk merges runs that an 8 KiB cap kept separate, demoting a
+  few target lines a rank or two. The 400-line point additionally drops ripgrep
+  **hybrid recall@10** (0.273 → 0.227). The hugo (Go) slice is flat across the
+  whole grid — its labeled targets are all whole-symbol or short-module, so
+  module-cap changes do not move them — so the Rust slice is the binding
+  constraint, and it says *do not raise the caps*.
+- **Footprint never regresses** at any point (all RSS ≤ 22 140 KB ≤ 24 086 KB
+  ceiling; all DB ≤ 40 607 744 B ≤ 44 668 518 B ceiling) — so footprint is not
+  the discriminator; **recall is**, and recall says keep the default.
+
+Because no point improves recall and the only non-regressing points merely tie,
+the correct outcome per the US-4 acceptance contract (and OQ-4: "no change +
+documented" is an accepted result) is to **keep `MAX_CHUNK_LINES=200` and
+`MAX_CHUNK_BYTES=8192`**. The doc comments at `chunker.rs:43`/`:49` are updated
+from "UNTUNED" to record this validation; the caps themselves are unchanged.
+
+**No re-soak needed.** Amendment B's mandatory re-soak fires only *if a cap
+changes*; since no cap changed, the existing soak rows above stay valid as-is.
+(The baseline soak was also independently re-measured on this 46 GB box during
+the sweep — 21 896 KB / 40 607 744 B / 16 400 chunks — matching the 48 GB soak
+row's 21.5 MB / 39 MB / 16 400 chunks within jitter, confirming the soak claim
+holds on both boxes.)
+
+**Rollback / re-tune procedure.** The caps are two `usize` consts in one file.
+To change them: edit `MAX_CHUNK_LINES` (`chunker.rs:43`) and/or `MAX_CHUNK_BYTES`
+(`chunker.rs:49`), then **re-index** any existing database (`reindex` with
+`force=true`, or delete `.apohara-codesearch/index.db`). Because chunk ids are
+`path:start-end`, a re-index fully regenerates every boundary — there is **no
+on-disk migration and no format change**. To revert this US-4 work specifically,
+`git checkout -- crates/apohara-indexer/src/chunker.rs` (restores both consts +
+doc comments) and re-index. The determinism/property tests
+(`chunk_ids_pairwise_distinct`, `chunk_caps_module_remainder`,
+`module_split_prefers_blank_line`, `module_split_reindex_stable`,
+`rrf_beats_bm25_alone`, plus the synthetic bench twice-run assertion) are the
+regression guard for any future cap change.

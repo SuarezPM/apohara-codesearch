@@ -35,17 +35,26 @@ pub const WINDOW_OVERLAP: usize = 15;
 /// Maximum number of source lines in a Module (or Window) chunk before it is
 /// flushed and a new sub-chunk begins.
 ///
-/// UNTUNED INITIAL DEFAULT — not a measured optimum. Revisited once a
-/// recall/MRR benchmark over varied chunk sizes exists to provide the
-/// tuning signal. Until then this is a conservative round number chosen so a
-/// chunk stays roughly one screenful and its bag-of-tokens embedding is not
-/// diluted by thousands of lines.
+/// Validated optimal on Rust+Go recall at these SHAs; unchanged. A measured
+/// sweep (US-4, 2026-06-05) over `lines ∈ {150,200,300,400} × bytes ∈
+/// {8192,16384}` re-ran the external recall bench (ripgrep `82313cf` Rust /
+/// hugo `7d1b1fb` Go) and the tokio footprint soak at every grid point. No grid
+/// point beat this default: raising the line cap to 400 *regressed* ripgrep
+/// recall@5 (0.273→0.227), and every 16 KiB-byte point lost ripgrep MRR
+/// (0.1494→0.1471), while 150 and 300 lines merely tied. So 200 stays — a chunk
+/// stays roughly one screenful and its bag-of-tokens embedding is not diluted by
+/// thousands of lines. TS/Python remain unmeasured (OQ-5). See BENCHMARK.md
+/// "Chunk-cap sweep (US-4)".
 pub const MAX_CHUNK_LINES: usize = 200;
 /// Maximum byte length of a Module (or Window) chunk body before it is flushed.
 ///
-/// UNTUNED INITIAL DEFAULT — not a measured optimum. Revisited once a
-/// recall/MRR benchmark exists. 8 KiB keeps a chunk's lexical content bounded so
-/// its bag-of-tokens embedding is not diluted by a very long line block.
+/// Validated optimal on Rust+Go recall at these SHAs; unchanged. The same US-4
+/// sweep (2026-06-05; ripgrep `82313cf` / hugo `7d1b1fb`) showed raising this
+/// cap to 16 KiB regressed ripgrep MRR (BM25 0.1494→0.1471, hybrid
+/// 0.1191→0.1177) with no recall gain on either slice, so 8 KiB stays. 8 KiB
+/// keeps a chunk's lexical content bounded so its bag-of-tokens embedding is not
+/// diluted by a very long line block. TS/Python remain unmeasured (OQ-5). See
+/// BENCHMARK.md "Chunk-cap sweep (US-4)".
 pub const MAX_CHUNK_BYTES: usize = 8 * 1024;
 
 /// What a [`ChunkSpec`] represents.
