@@ -77,10 +77,14 @@ would be checked — not asserted.
 
 | Repo | LOC | Files indexed | Chunks | Index time (cold, force) | Peak RSS (indexing) | Query latency (warm) | Index DB on disk |
 |------|-----|---------------|--------|--------------------------|---------------------|----------------------|------------------|
-| [tokio](https://github.com/tokio-rs/tokio) (shallow clone) | 174,542 (.rs) | 835 | 16,400 | 9.0 s | ~22 MB | ~10 ms | 40 MB (single SQLite file) |
+| [tokio](https://github.com/tokio-rs/tokio) (shallow clone) | 174,542 (.rs) | 835 | 16,400 | 9.8 s | ~21.5 MB | ~18 ms | 39 MB (single SQLite file) |
+| [hugo](https://github.com/gohugoio/hugo) (shallow clone) | 224,209 (.go) | 2,270 | 21,361 | 26.1 s | ~23.5 MB | ~22 ms | 54 MB (single SQLite file) |
 
 Measured on a Ryzen 5 3600 / 48 GB box with the default (feature-hash) embedder,
-release binary, driven over the stdio MCP `reindex` + `search_code` tools.
+release binary, driven over the stdio MCP `reindex` + `search_code` tools. Each
+repo indexed twice (cold) to bound RSS sampling noise: peak RSS varied < 2.5 %
+run-to-run (tokio 21.7/22.2 MB, hugo 24.1/23.6 MB), so a +10 % footprint ceiling
+sits comfortably above measurement jitter.
 
 Notes:
 - **No OOM, no panic.** Peak resident memory while indexing a 174k-LOC repo is
@@ -90,5 +94,23 @@ Notes:
 - The warm query `"mutex lock guard poison"` and the indexing-time query
   `"spawn async task on the runtime scheduler"` both returned correct,
   on-topic tokio runtime/sync chunks with file/line + imports.
-- No chunking pathology surfaced on tokio (no giant-chunk dilution or runaway
-  module remainders) — the Phase-1 chunk cap + bounded module split hold at scale.
+- **Peak RSS is flat across repo size** (~22 MB for ripgrep 52k LOC, tokio 174k,
+  and hugo 224k) — resident memory does not scale with the repo, confirming the
+  index pipeline is memory-bounded (the "near-zero resident RAM" claim holds at
+  scale on a 224k-LOC Go repo, not just Rust).
+- **tokio (Rust): no chunking pathology.** The largest chunks are legitimate
+  whole symbols (e.g. `tokio-stream/src/stream_ext.rs` `StreamExt` trait, 1106
+  lines / 38 KB — stored whole, truncated only for FTS/embed); `module`/`window`
+  chunks respect `MAX_CHUNK_BYTES` (max ~8187 B). The Phase-1 cap + bounded
+  module split hold.
+- **hugo (Go): one chunking pathology found (documented, fix deferred).**
+  Minified/generated JS assets in the repo are indexed as oversized `window`
+  chunks: `internal/warpc/js/renderkatex.bundle.js` → a 277 KB chunk (36 lines),
+  `livereload/livereload.min.js` → 80 KB (7 lines). `MAX_CHUNK_LINES=200` does
+  not split them (few lines, each enormously long) and `MAX_CHUNK_BYTES` only
+  truncates the *indexed* (FTS/embed) text, so the full minified blob is still
+  stored in `chunks.body`, bloating the DB with non-source noise. Only 27 of
+  21,361 chunks exceed 8 KB, so it is bounded — no OOM, no panic — but it is real
+  index bloat. **Follow-up (own impact analysis, out of US-3 measurement scope):**
+  skip generated/minified assets in the walker (heuristic: very high bytes-per-line),
+  or cap the stored `body`. Tracked for a future hardening pass.
