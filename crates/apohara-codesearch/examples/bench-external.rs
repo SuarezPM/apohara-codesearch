@@ -45,8 +45,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use apohara_indexer::{
-    active_embedder, bm25_query, hydrate, index_repo, migrate, open_db, rrf_fuse, vector_query_with,
-    HydratedHit, EMBED_DIM,
+    active_embedder, bm25_query, hydrate, index_repo, migrate, open_db, rrf_fuse,
+    vector_query_with, HydratedHit, EMBED_DIM,
 };
 
 /// Env var pointing at the parent directory that holds the pre-cloned `ripgrep/`
@@ -861,7 +861,10 @@ mod tests {
     /// K covers the largest cutoff, and every label's target line is positive.
     #[test]
     fn label_set_invariants() {
-        assert!(*CUTOFFS.iter().max().unwrap() <= K, "K must cover all cutoffs");
+        assert!(
+            *CUTOFFS.iter().max().unwrap() <= K,
+            "K must cover all cutoffs"
+        );
         for slice in SLICES {
             let total = slice.labels.len();
             let known_miss = slice.labels.iter().filter(|l| l.known_miss).count();
@@ -888,7 +891,10 @@ mod tests {
     fn slice_sizes_match_plan() {
         let ripgrep = SLICES.iter().find(|s| s.subdir == "ripgrep").unwrap();
         let hugo = SLICES.iter().find(|s| s.subdir == "hugo").unwrap();
-        let typescript = SLICES.iter().find(|s| s.subdir == "TypeScript/src").unwrap();
+        let typescript = SLICES
+            .iter()
+            .find(|s| s.subdir == "TypeScript/src")
+            .unwrap();
         let django = SLICES.iter().find(|s| s.subdir == "django/django").unwrap();
         assert!(
             (20..=25).contains(&ripgrep.labels.len()),
