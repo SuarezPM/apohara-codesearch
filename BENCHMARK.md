@@ -496,3 +496,160 @@ there is no RNG / seed in this path.
 > measured. The harness, the five arms, the determinism gate, and the metric unit
 > tests (`cargo test -p apohara-codesearch --example bench-codesearchnet`) all
 > ship and pass with the corpus absent.
+
+## v0.8 — CodeSearchNet with a REAL learned embedder (EmbeddingGemma)
+
+> **What changed vs every section above.** All prior CSN/real-OSS numbers were
+> measured with the default **feature-hash** embedder, whose headline finding is
+> the *fusion tax*: hybrid LOSES to BM25-only and the vector arm is near-noise
+> (vector-only recall@5 of 0.340 / 0.005 / 0.035 on python / go / typescript).
+> v0.8 re-runs the SAME harness, unchanged, with the REAL **EmbeddingGemma**
+> backend (`embedder_gemma.rs`, pure-candle Gemma3 256-d Matryoshka, asymmetric
+> query/document prompts, opt-in behind `--features gguf-embed` +
+> `APOHARA_EMBED_MODEL`). The result **inverts the fusion tax**: the vector arm
+> becomes a first-class retriever and **hybrid beats BM25-only on every NL
+> slice**, and the AC4 recovery gate (G2) **clears on every identifier slice**.
+
+**Backend & provenance.**
+
+| Field | Value |
+|-------|-------|
+| Embedder | EmbeddingGemma (`embeddinggemma-300m`), pure-candle Gemma3 forward pass, 256-d Matryoshka output, L2-normalized, asymmetric prompts (`embed_query` prepends the query instruction, `embed_document` the document prefix). Parity vs the reference oracle: cosine 0.999983 (S3). |
+| Activation | `APOHARA_EMBED_MODEL=/path/to/eg-st cargo run --release --features gguf-embed --example bench-codesearchnet` (and `--example bench-csn-identifier`). The default build ships NO model and the `cargo tree -e normal -p apohara-indexer` candle scan stays 0 — the ML deps are example-gated, not in the default binary. |
+| Index/query path | UNCHANGED from server.rs: chunks are indexed via `storage::index → embed_document`, queries via `vector_query_with → knn_query_with → embed_query`. The bench already routed through `vector_query_with`, so the query arm uses `embed_query` (asymmetric prompt) with no harness change required. |
+| Device | CPU (Ryzen 5 3600). The 300M model on CPU is heavy: each NL slice (200 records × 5 arms × 2 determinism passes) takes minutes — this is a one-off, not CI. |
+| Dataset | identical to the feature-hash CSN section above (same HF test-split Parquet → JSONL, same sha256s); the ONLY variable changed is the embedder. |
+
+### NL `{docstring → code}` slices — EmbeddingGemma, 200-record prefix
+
+Measured 2026-06-06, `APOHARA_EMBED_MODEL=/tmp/eg-st`, release binary. Same
+`(file, target_line)` relevance, same twice-run byte-identical determinism gate.
+The **Δ** column is EmbeddingGemma recall@5 minus the feature-hash baseline from
+the section above.
+
+| Slice | known-miss | mode | recall@5 | recall@10 | MRR | Δ recall@5 vs feature-hash |
+|-------|-----------|------|----------|-----------|-----|----------------------------|
+| **python** (200 q) | 1 (0%) | BM25-only | 0.955 | 0.990 | 0.8915 | — (BM25 unchanged) |
+| | | vector-only | 0.950 | 0.975 | 0.8939 | **+0.610** (0.340 → 0.950) |
+| | | hybrid (RRF) | **0.980** | 0.985 | 0.9322 | +0.050 (0.930 → 0.980) |
+| | | hybrid+MMR | 0.980 | 0.985 | 0.9246 | +0.100 |
+| | | adaptive | 0.975 | 0.980 | 0.9335 | +0.620 |
+| **go** (200 q) | 2 (1%) | BM25-only | 0.860 | 0.930 | 0.7259 | — |
+| | | vector-only | **0.990** | 0.990 | 0.9092 | **+0.985** (0.005 → 0.990) |
+| | | hybrid (RRF) | **0.970** | 0.990 | 0.8522 | +0.170 (0.800 → 0.970) |
+| | | hybrid+MMR | 0.945 | 0.980 | 0.8404 | +0.210 |
+| | | adaptive | 0.985 | 0.990 | 0.8875 | +0.980 |
+| **typescript** (200 q) | 9 (4%) | BM25-only | 0.740 | 0.840 | 0.5703 | — |
+| | | vector-only | **0.885** | 0.935 | 0.7909 | **+0.850** (0.035 → 0.885) |
+| | | hybrid (RRF) | **0.920** | 0.945 | 0.7521 | +0.245 (0.675 → 0.920) |
+| | | hybrid+MMR | 0.860 | 0.910 | 0.7316 | +0.340 |
+| | | adaptive | 0.915 | 0.935 | 0.7854 | +0.760 |
+
+**Headline (NL): the fusion tax is GONE with a real embedder.**
+- The **vector arm is now first-class**: it MATCHES BM25 on python (0.950 vs
+  0.955) and BEATS it outright on go (0.990 vs 0.860) and typescript (0.885 vs
+  0.740) — the exact opposite of the feature-hash near-noise (0.340 / 0.005 /
+  0.035).
+- **Hybrid (RRF) beats BM25-only on ALL THREE slices** (python 0.980 > 0.955,
+  go 0.970 > 0.860, ts 0.920 > 0.740). Under feature-hash hybrid LOST on every
+  slice; with EmbeddingGemma fusion is a *gain*, confirming the v0.7 hypothesis
+  (S1) that a learned embedder is the lever that flips the picture.
+- "Hybrid worse than best single mode" counts drop in spirit but stay non-zero
+  (python 13, go 35, ts 47) — fusion is now net-positive on aggregate recall yet
+  still demotes *some* individual queries; honest, not a clean sweep.
+- Adaptive tags multi-word NL docstrings vector-heavy, which now HELPS (the
+  vector arm is strong): adaptive tracks hybrid closely (0.975 / 0.985 / 0.915).
+  This is the inverse of the feature-hash CSN result, where vector-heavy
+  amplified a noise arm and adaptive collapsed.
+
+### Identifier `{func_name → code}` slice — the AC4 recovery gate (G2)
+
+The AC4 gate needs **identifier-shaped** queries, not NL docstrings — the query
+shape `classify_query_weights` up-weights BM25 for. A sibling harness,
+`crates/apohara-codesearch/examples/bench-csn-identifier.rs`, uses the CSN
+`func_name` (the function IDENTIFIER, e.g. `get_vid_from_url`,
+`YouTube.parse_url`) as the query against the SAME `code` body. The corpus is the
+`func_name`/`func_code_string` columns of the same HF test-split Parquet,
+extracted to `$APOHARA_CSN_IDENT_ROOT/{python,go,typescript}.jsonl` (func_name in
+the `docstring` slot so one loader serves both benches), func_names filtered
+non-empty. The query is embedded through the SAME `embed_query` path server.rs
+runs (asymmetric prompt kept — AC4 asks whether the system *as deployed* recovers
+on identifier queries, so the bench mirrors the deployed path rather than
+stripping the prompt).
+
+**AC4 (G2) bar:** `adaptive recall@5 >= BM25-only AND adaptive recall@5 >= plain-hybrid`.
+
+Identifier corpus (record it yourself):
+
+| File | records | sha256 |
+|------|---------|--------|
+| `python.jsonl` | 22176 | `aa9d09d67b5045bc87bede96560b6a7cb085de74f47ab3cf86c743cd287af573` |
+| `go.jsonl` | 14291 | `1bbd747d3b5c6e221d4a2672bf8942773277575de983c659895ea5c8307cbd6b` |
+| `typescript.jsonl` (from javascript) | 4441 | `554eb678900c1c27a2c074425fd85a8d60d25ac63730b344c8321ddcae6f3cbc` |
+
+Measured 2026-06-06, `APOHARA_EMBED_MODEL=/tmp/eg-st`, **100-record prefix** per
+slice (the identifier bench caps at 100 — the 300M model on CPU is heavy; bump
+`MAX_RECORDS_PER_SLICE` for a deeper run):
+
+| Slice | mode | recall@5 | recall@10 | MRR |
+|-------|------|----------|-----------|-----|
+| **python** (100 q) | BM25-only | 0.980 | 0.980 | 0.7552 |
+| | vector-only | 0.960 | 0.980 | 0.9094 |
+| | hybrid (RRF) | 0.980 | 0.990 | 0.8548 |
+| | hybrid+MMR | 0.990 | 0.990 | 0.8480 |
+| | **adaptive** | **0.980** | 0.980 | 0.8118 |
+| **go** (100 q) | BM25-only | 0.980 | 1.000 | 0.8779 |
+| | vector-only | 0.970 | 0.990 | 0.8859 |
+| | hybrid (RRF) | 0.990 | 1.000 | 0.9153 |
+| | hybrid+MMR | 1.000 | 1.000 | 0.9103 |
+| | **adaptive** | **0.990** | 1.000 | 0.9136 |
+| **typescript** (100 q) | BM25-only | 0.990 | 1.000 | 0.8568 |
+| | vector-only | 0.980 | 0.980 | 0.9025 |
+| | hybrid (RRF) | 1.000 | 1.000 | 0.9217 |
+| | hybrid+MMR | 1.000 | 1.000 | 0.9062 |
+| | **adaptive** | **1.000** | 1.000 | 0.9100 |
+
+**AC4 (G2) verdict — GO on all three slices:**
+
+| Slice | adaptive r@5 | ≥ BM25 r@5 | ≥ hybrid r@5 | AC4 |
+|-------|-------------|------------|--------------|-----|
+| python | 0.980 | 0.980 ✓ | 0.980 ✓ | **GO** (exact tie) |
+| go | 0.990 | 0.980 ✓ | 0.990 ✓ | **GO** |
+| typescript | 1.000 | 0.990 ✓ | 1.000 ✓ | **GO** |
+
+> **Read the GO honestly — this is a NO-REGRESSION result on a saturated task,
+> not a dramatic win.** The identifier task is lexically EASY by construction: each
+> query is a `func_name` that appears verbatim in its own definition, over a corpus
+> of isolated one-function files, so every arm saturates near 1.0 and the margins
+> are 0–1 point (python is an exact three-way tie at 0.980). What AC4 verifies here
+> is therefore that adaptive fusion **does not drag the exact-symbol lookup below
+> BM25** — the precise failure feature-hash exhibited (below) — NOT that it lifts it
+> dramatically. The lift adaptive *can* deliver shows up on the NL slices above
+> (where hybrid/adaptive beat BM25 by a real margin); on identifier lookups the bar
+> is "don't regress", and with EmbeddingGemma it is cleared, whereas feature-hash
+> regressed it.
+
+> **Why this is the real test, and why feature-hash failed it.** Re-running the
+> identifier bench with the DEFAULT feature-hash embedder gives **NO-GO** on all
+> three slices: adaptive recall@5 0.970 / 0.950 / 0.980 sits 1–3 points BELOW
+> BM25-only (0.980 / 0.980 / 0.990), because the vector arm is near-noise
+> (vector-only recall@5 0.160 / 0.030 / 0.010) and even a BM25-heavy adaptive
+> fusion can only drag itself down by mixing it in. With EmbeddingGemma the
+> vector arm jumps to 0.960 / 0.970 / 0.980, so adaptive fusion has a real second
+> signal to fuse and reaches BM25 parity or better on every slice — **AC4
+> clears.** The recovery adaptive was designed for is real, and it is gated on a
+> real code-capable embedder exactly as the v0.7 limitation predicted. This is
+> the empirical basis for Decision **G2**.
+
+**Determinism:** both benches measure each slice twice and assert byte-identical
+metrics before printing (the EmbeddingGemma forward pass is deterministic on CPU
+and the RRF tie-break is total — no RNG in this path). Metric unit tests ship and
+pass with the corpus absent:
+`cargo test -p apohara-codesearch --features gguf-embed --example bench-csn-identifier`.
+
+> **Honesty note.** The NL slices use a 200-record prefix and the identifier
+> slices a 100-record prefix (the identifier bench's lower cap reflects the CPU
+> cost of the 300M model — documented, not hidden). Both are deterministic
+> file-order prefixes, so the numbers are byte-stable and reproducible; a deeper
+> run only needs a larger cap and more wall-clock. The corpus is never vendored;
+> the sha256s pin the exact bytes measured.
