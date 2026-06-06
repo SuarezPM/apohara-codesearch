@@ -26,8 +26,8 @@ pub mod walker;
 
 pub use storage::{
     ensure_vec_extension_registered, insert_chunk, insert_chunk_full, insert_chunk_full_with,
-    knn_query, knn_query_with, open_db, write_file_structural, IndexedChunk, KnnHit, SymbolData,
-    EMBED_DIM,
+    knn_query, knn_query_with, open_db, open_db_with, write_file_structural, IndexedChunk, KnnHit,
+    SymbolData, EMBED_DIM,
 };
 
 pub use embedder::{

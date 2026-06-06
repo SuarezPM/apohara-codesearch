@@ -12,6 +12,17 @@ mod dto;
 mod server;
 mod watch;
 
+/// Process-global lock serializing tests that mutate the shared `XDG_CONFIG_HOME`
+/// (the sidecar registry's config dir). Both `watch::tests` and `server::tests`
+/// drive the registry, so they MUST take this ONE lock to avoid clobbering each
+/// other's env override when run in parallel.
+#[cfg(test)]
+pub(crate) fn test_env_guard() -> &'static std::sync::Mutex<()> {
+    use std::sync::{Mutex, OnceLock};
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 use std::path::PathBuf;
 
 use anyhow::Result;

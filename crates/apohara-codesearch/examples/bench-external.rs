@@ -45,7 +45,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use apohara_indexer::{
-    active_embedder, bm25_query, hydrate, index_repo, migrate, open_db, rrf_fuse,
+    active_embedder, bm25_query, hydrate, index_repo, migrate, open_db_with, rrf_fuse,
     vector_query_with, HydratedHit, EMBED_DIM,
 };
 
@@ -699,17 +699,17 @@ fn measure(corpus: &Path, labels: &[Label]) -> Result<Measurement> {
     let db_path = tmp.join("bench-index.db");
 
     let result = (|| -> Result<Measurement> {
-        let conn = open_db(&db_path).context("open temp index db")?;
-        migrate(&conn).context("migrate temp index db")?;
-        index_repo(&conn, corpus).context("index external corpus")?;
-
         // Query with the SAME active embedder the index was built with. With the
         // `gguf-embed` feature off / no model configured this is the feature-hash
         // embedder (unchanged baseline); with the real model configured via
         // APOHARA_EMBED_MODEL it is the candle BERT backend — so the vector column
         // measures the REAL embedder's recall, not feature-hash queries against
         // real-embedder vectors (which would be a meaningless mismatch).
+        // Resolve it BEFORE open so the chunks_vec DDL is created at its width.
         let embedder = active_embedder(EMBED_DIM);
+        let conn = open_db_with(&db_path, embedder.dim()).context("open temp index db")?;
+        migrate(&conn).context("migrate temp index db")?;
+        index_repo(&conn, corpus).context("index external corpus")?;
 
         let mut bm_ranks = Vec::with_capacity(labels.len());
         let mut ve_ranks = Vec::with_capacity(labels.len());

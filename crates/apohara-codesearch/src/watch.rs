@@ -12,7 +12,9 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use apohara_indexer::{migrate, open_db, registry, reindex, ReindexReport};
+use apohara_indexer::{
+    active_embedder, migrate, open_db_with, registry, reindex, ReindexReport, EMBED_DIM,
+};
 use notify::{recommended_watcher, RecursiveMode, Watcher};
 
 /// Sub-directory under the repo root holding the index database (mirrors the
@@ -63,7 +65,10 @@ fn is_index_path(root: &Path, path: &Path) -> bool {
 /// the report reflects the change. `force == false` → content-hash incremental.
 pub fn handle_change(root: &Path) -> Result<ReindexReport> {
     let db = db_path(root)?;
-    let conn = open_db(&db).context("open_db")?;
+    // Open the chunks_vec DDL at the ACTIVE embedder's width before reindex,
+    // which resolves the SAME embedder and stamps/verifies its (id, dim).
+    let dim = active_embedder(EMBED_DIM).dim();
+    let conn = open_db_with(&db, dim).context("open_db")?;
     migrate(&conn).context("migrate")?;
     let report = reindex(&conn, root, false).context("reindex")?;
     // Record the root -> db mapping in the sidecar (best-effort, never fatal).
@@ -185,16 +190,17 @@ mod tests {
     use super::*;
     use std::fs;
     use std::sync::mpsc::Sender;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::Mutex;
     use tempfile::TempDir;
 
     /// Serializes tests that mutate the process-global `XDG_CONFIG_HOME`, which
     /// steers `registry::registry_path()` at a tempdir. Cargo runs a crate's
     /// tests on parallel threads of ONE process, so an env var is shared state;
     /// this guard keeps two such tests from clobbering each other's setting.
+    /// Delegates to the crate-wide lock so `server::tests` (which also drives the
+    /// registry via `ensure_indexed`) serializes against these tests too.
     fn env_guard() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        crate::test_env_guard()
     }
 
     /// Seed a tiny repo with one Rust source file.

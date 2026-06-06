@@ -68,7 +68,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use apohara_indexer::{
     active_embedder, bm25_query, hydrate, index_repo, load_embeddings, migrate, mmr_rerank,
-    open_db, resolve_weights, rrf_fuse, rrf_fuse_weighted, vector_query_with, HydratedHit,
+    open_db_with, resolve_weights, rrf_fuse, rrf_fuse_weighted, vector_query_with, HydratedHit,
     EMBED_DIM, MMR_LAMBDA,
 };
 
@@ -263,13 +263,13 @@ fn measure(jsonl: &Path, ext: &str) -> Result<Measurement> {
         // relevance does not depend on the dataset's own paths.
         let labels = materialize_corpus(jsonl, &corpus, ext)?;
 
-        let conn = open_db(&db_path).context("open temp index db")?;
-        migrate(&conn).context("migrate temp index db")?;
-        index_repo(&conn, &corpus).context("index materialized CSN corpus")?;
-
         // Query with the SAME active embedder the index was built with (default:
         // feature-hash; candle BERT when configured via APOHARA_EMBED_MODEL).
+        // Resolve it BEFORE open so the chunks_vec DDL is created at its width.
         let embedder = active_embedder(EMBED_DIM);
+        let conn = open_db_with(&db_path, embedder.dim()).context("open temp index db")?;
+        migrate(&conn).context("migrate temp index db")?;
+        index_repo(&conn, &corpus).context("index materialized CSN corpus")?;
 
         let mut bm_ranks = Vec::with_capacity(labels.len());
         let mut ve_ranks = Vec::with_capacity(labels.len());

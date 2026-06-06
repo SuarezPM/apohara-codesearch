@@ -930,6 +930,52 @@ mod tests {
         assert!(real > 0, "rows now carry the real id");
     }
 
+    /// Story 2 AC3: an index built (and meta-stamped) with one embedder dim,
+    /// reopened/queried with an embedder of a DIFFERENT dim, bails LOUD via
+    /// `verify_embedder_meta` — never silently mixing incompatible widths.
+    #[test]
+    fn dim_mismatch_on_reopen_bails_loud() {
+        use crate::embedder::FeatureHashEmbedder;
+        use crate::schema::{verify_embedder_meta, write_embedder_meta};
+        use crate::storage::{insert_chunk_full_with, open_db_with};
+
+        let db = TempDir::new().unwrap();
+
+        // Build a dim-768 index exactly as production does: open_db_with creates
+        // the float[768] DDL, then the first write stamps the embedder's (id, dim)
+        // into meta (here via the same primitives reindex uses). The 768-wide
+        // feature-hash backend exercises the gate with no real model.
+        let dim_x = 768usize;
+        let conn = open_db_with(&db.path().join("idx.sqlite"), dim_x).unwrap();
+        migrate(&conn).unwrap();
+        let embedder_x = FeatureHashEmbedder::new(dim_x);
+        write_embedder_meta(&conn, embedder_x.id(), embedder_x.dim()).unwrap();
+        let chunk = IndexedChunk {
+            id: "src/a.rs:1-1".to_string(),
+            file_path: "src/a.rs".to_string(),
+            start_line: 1,
+            end_line: 1,
+            body: "fn alpha() -> u32 { 1 }".to_string(),
+        };
+        insert_chunk_full_with(&conn, &chunk, "function", None, &embedder_x).unwrap();
+        assert_eq!(
+            crate::schema::read_embedder_meta(&conn).unwrap(),
+            Some((embedder_x.id().to_string(), dim_x))
+        );
+
+        // Reopen-and-query with a DIFFERENT-dim embedder: the gate refuses.
+        let embedder_y = FeatureHashEmbedder::new(384);
+        let err = verify_embedder_meta(&conn, embedder_y.id(), embedder_y.dim())
+            .expect_err("different dim must be refused");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("embedder mismatch"), "clear error: {msg}");
+        assert!(msg.contains("dim"), "names the dim conflict: {msg}");
+
+        // The same-dim embedder is still accepted (idempotent reopen).
+        verify_embedder_meta(&conn, embedder_x.id(), embedder_x.dim())
+            .expect("matching dim accepted");
+    }
+
     /// AC6 (multi-repo ISOLATION): two repos that BOTH contain `src/main.rs`
     /// live in SEPARATE index.db files (Decision E1). Reindexing A must not
     /// touch B's rows; B's `src/main.rs` still resolves to B's content; the two

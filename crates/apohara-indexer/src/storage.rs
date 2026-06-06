@@ -101,9 +101,39 @@ pub fn ensure_vec_extension_registered() {
     });
 }
 
-/// Open (or create) the sqlite-vec backed database at `path`, ensuring the
-/// extension is registered and the schema (chunks + chunks_vec) exists.
+/// Open (or create) the sqlite-vec backed database at `path` with the DEFAULT
+/// feature-hash width ([`EMBED_DIM`] = 384).
+///
+/// Thin wrapper over [`open_db_with`]: keeps the historic single-arg signature
+/// for every default call-site (and every test) byte-identical — the feature-hash
+/// `chunks_vec(embedding float[384])` DDL and its vectors do not change. Paths
+/// that index/query with a non-default embedder MUST call [`open_db_with`] with
+/// `active_embedder(EMBED_DIM).dim()` so the DDL width matches the embedder that
+/// produces the vectors (see [`open_db_with`] for the ordering rationale).
 pub fn open_db(path: &Path) -> Result<Connection> {
+    open_db_with(path, EMBED_DIM)
+}
+
+/// Open (or create) the sqlite-vec backed database at `path`, ensuring the
+/// extension is registered and the schema (chunks + `chunks_vec`) exists, with
+/// the `chunks_vec` vector width set to `dim`.
+///
+/// ## Why the dim is a CALLER argument (ordering)
+///
+/// `open_db` creates the `chunks_vec` DDL — a `float[N]` width FIXED at table
+/// creation — but the active embedder (which decides `N` via [`Embedder::dim`])
+/// is resolved LATER, inside the index/query path. So the only way to let a
+/// non-default embedder (e.g. 768/256-wide) build its own index is for the
+/// embedder-aware call-sites to resolve the active embedder FIRST and pass its
+/// `dim()` here, BEFORE opening. The default path keeps passing [`EMBED_DIM`] via
+/// [`open_db`], so the feature-hash index stays exactly `float[384]`.
+///
+/// The DDL width and the embedder that produced the vectors are then both pinned:
+/// [`crate::schema::write_embedder_meta`] stamps `(id, dim)` on first write and
+/// [`crate::schema::verify_embedder_meta`] refuses a later open with a different
+/// dim/id, so a width that disagrees with the active embedder can never be queried
+/// as garbage.
+pub fn open_db_with(path: &Path, dim: usize) -> Result<Connection> {
     ensure_vec_extension_registered();
     let conn = Connection::open(path).context("open sqlite db")?;
     conn.execute_batch(&format!(
@@ -115,9 +145,8 @@ pub fn open_db(path: &Path) -> Result<Connection> {
             body TEXT NOT NULL
          );
          CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(
-            embedding float[{}]
-         );",
-        EMBED_DIM
+            embedding float[{dim}]
+         );"
     ))
     .context("create schema (chunks + chunks_vec)")?;
     Ok(conn)
@@ -485,6 +514,58 @@ mod tests {
                 "SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH 'compute'"
             ) >= 1
         );
+    }
+
+    /// Story 2 AC1: `open_db_with(path, dim)` parametrizes the `chunks_vec` DDL
+    /// width — a non-default dim produces `float[<dim>]`, while `open_db` (and
+    /// `open_db_with(_, EMBED_DIM)`) stay at the feature-hash default `float[384]`.
+    #[test]
+    fn open_db_with_parametrizes_vec_width() {
+        // The DDL text recorded in sqlite_master carries the declared vec width.
+        let vec_ddl = |conn: &Connection| -> String {
+            conn.query_row(
+                "SELECT sql FROM sqlite_master WHERE name = 'chunks_vec'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+        };
+
+        // Default open is byte-identical to the historic float[384] DDL.
+        let d384 = tempdir().unwrap();
+        let conn384 = open_db(&d384.path().join("idx.sqlite")).unwrap();
+        assert_eq!(EMBED_DIM, 384);
+        assert!(
+            vec_ddl(&conn384).contains("float[384]"),
+            "default open_db must keep float[384], got: {}",
+            vec_ddl(&conn384)
+        );
+
+        // A non-default width is honored by open_db_with.
+        let d768 = tempdir().unwrap();
+        let conn768 = open_db_with(&d768.path().join("idx.sqlite"), 768).unwrap();
+        let ddl768 = vec_ddl(&conn768);
+        assert!(
+            ddl768.contains("float[768]") && !ddl768.contains("float[384]"),
+            "open_db_with(_, 768) must declare float[768], got: {ddl768}"
+        );
+
+        // Functional check: a 768-wide vector inserts + KNN-queries against the
+        // 768 index; the same width is what makes the DDL/embedder agree.
+        migrate(&conn768).unwrap();
+        let e768 = crate::embedder::FeatureHashEmbedder::new(768);
+        let chunk = IndexedChunk {
+            id: "src/x.rs:1-1".to_string(),
+            file_path: "src/x.rs".to_string(),
+            start_line: 1,
+            end_line: 1,
+            body: "fn wide() {}".to_string(),
+        };
+        insert_chunk_full_with(&conn768, &chunk, "function", None, &e768).unwrap();
+        assert_eq!(count(&conn768, "SELECT COUNT(*) FROM chunks_vec"), 1);
+        let hits = knn_query_with(&conn768, "fn wide() {}", 1, &e768).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].chunk_id, "src/x.rs:1-1");
     }
 
     #[test]

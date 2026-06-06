@@ -9,8 +9,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use apohara_indexer::{
     active_embedder, apply_structural_boost, bm25_query, dedup_content, dedup_overlapping, hydrate,
-    index_repo, load_embeddings, migrate, mmr_rerank, open_db, registry, reindex, resolve_weights,
-    rrf_fuse_weighted, vector_query_with, verify_embedder_meta, EMBED_DIM, MMR_LAMBDA, RRF_K,
+    index_repo, load_embeddings, migrate, mmr_rerank, open_db_with, registry, reindex,
+    resolve_weights, rrf_fuse_weighted, vector_query_with, verify_embedder_meta, EMBED_DIM,
+    MMR_LAMBDA, RRF_K,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
@@ -149,7 +150,12 @@ fn ensure_indexed(root: &Path, db: &Path) -> Result<(), ErrorData> {
     if db.exists() {
         return Ok(());
     }
-    let conn = open_db(db).map_err(|e| internal(format!("open_db: {e}")))?;
+    // Create the chunks_vec DDL at the ACTIVE embedder's width (default 384 with
+    // feature-hash; 768/256 with a real model) BEFORE the index is built — the
+    // width is fixed at table creation, and `index_repo` below resolves the SAME
+    // embedder and stamps its (id, dim) into meta on first write.
+    let dim = active_embedder(EMBED_DIM).dim();
+    let conn = open_db_with(db, dim).map_err(|e| internal(format!("open_db: {e}")))?;
     migrate(&conn).map_err(|e| internal(format!("migrate: {e}")))?;
     // Lazy first-index MUST go through index_repo (insert_chunk_full), never the
     // quarantined insert_chunk primitive.
@@ -198,14 +204,18 @@ impl CodeSearchServer {
         );
         let diversify = diversify.unwrap_or(false);
         let boost_imports = boost_imports.unwrap_or(false);
-        let conn = open_db(&db).map_err(|e| internal(format!("open_db: {e}")))?;
-        migrate(&conn).map_err(|e| internal(format!("migrate: {e}")))?;
 
         // Resolve the active embedder (feature-hash by default; a local model
-        // only with the `gguf-embed` feature + a present model path). Refuse to
-        // query an index that was built with a different embedder (id/dim) — a
-        // clear error beats silently mis-ranking against incompatible vectors.
+        // only with the `gguf-embed` feature + a present model path) BEFORE
+        // opening so the chunks_vec DDL is created at the embedder's width when the
+        // db does not yet exist (ensure_indexed normally creates it first; this is
+        // the defensive path). Then refuse to query an index built with a
+        // different embedder (id/dim) — a clear error beats silently mis-ranking
+        // against incompatible vectors.
         let embedder = active_embedder(EMBED_DIM);
+        let conn =
+            open_db_with(&db, embedder.dim()).map_err(|e| internal(format!("open_db: {e}")))?;
+        migrate(&conn).map_err(|e| internal(format!("migrate: {e}")))?;
         verify_embedder_meta(&conn, embedder.id(), embedder.dim())
             .map_err(|e| internal(format!("verify_embedder_meta: {e}")))?;
 
@@ -270,7 +280,10 @@ impl CodeSearchServer {
     ) -> Result<Json<ReindexReportDto>, ErrorData> {
         let root = PathBuf::from(&path);
         let db = db_path(&root)?;
-        let conn = open_db(&db).map_err(|e| internal(format!("open_db: {e}")))?;
+        // Open the chunks_vec DDL at the ACTIVE embedder's width before reindex,
+        // which resolves the SAME embedder and stamps/verifies its (id, dim).
+        let dim = active_embedder(EMBED_DIM).dim();
+        let conn = open_db_with(&db, dim).map_err(|e| internal(format!("open_db: {e}")))?;
         migrate(&conn).map_err(|e| internal(format!("migrate: {e}")))?;
         let report = reindex(&conn, &root, force.unwrap_or(false))
             .map_err(|e| internal(format!("reindex: {e}")))?;
@@ -332,5 +345,61 @@ mod tests {
     fn search_code_adaptive_identifier_is_bm25_heavy() {
         let (bm25, vector) = resolve_weights(None, None, true, "parse_config");
         assert!(bm25 > vector);
+    }
+
+    /// Story 2 AC5 (lazy-first-index reopen gate): `ensure_indexed` stamps the
+    /// ACTIVE embedder on the first write, and the `search_code` reopen path then
+    /// gates a later open through `verify_embedder_meta`. This test drives the REAL
+    /// `ensure_indexed` (first index with embedder X = feature-hash 384) and then
+    /// replays the EXACT gate `search_code` runs (`open_db_with(db, dim)` +
+    /// `verify_embedder_meta`) with an embedder of a DIFFERENT dim (768),
+    /// asserting it bails loud instead of silently mixing widths.
+    #[test]
+    fn lazy_first_index_then_reopen_with_other_dim_bails() {
+        use apohara_indexer::{read_embedder_meta, Embedder, FeatureHashEmbedder};
+        use std::fs;
+
+        // ensure_indexed records the sidecar registry under XDG_CONFIG_HOME; take
+        // the crate-wide env lock and isolate that dir so this test neither
+        // touches the real registry nor races the watch env tests.
+        let _g = crate::test_env_guard()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let cfg = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", cfg.path());
+
+        let src = tempfile::tempdir().unwrap();
+        let root = src.path();
+        fs::write(root.join("a.rs"), "fn alpha() -> u32 { 1 }\n").unwrap();
+        let db = db_path(root).unwrap();
+
+        // (a) Lazy first-index: builds the float[384] DDL at the active embedder's
+        // width and stamps (id, dim) on the first write via index_repo.
+        let indexed = ensure_indexed(root, &db);
+
+        // Restore the env before any assertion can early-return and leak it.
+        match prev {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        indexed.expect("first index must succeed");
+        let conn = open_db_with(&db, EMBED_DIM).unwrap();
+        assert_eq!(
+            read_embedder_meta(&conn).unwrap(),
+            Some((apohara_indexer::FEATURE_HASH_ID.to_string(), EMBED_DIM)),
+            "first index stamps the active embedder (feature-hash 384)"
+        );
+        drop(conn);
+
+        // (b) Reopen with a DIFFERENT-dim embedder, replaying the search_code gate.
+        let other = FeatureHashEmbedder::new(768);
+        let conn = open_db_with(&db, other.dim()).unwrap();
+        migrate(&conn).unwrap();
+        let err = verify_embedder_meta(&conn, other.id(), other.dim())
+            .expect_err("a different-dim embedder must be refused on reopen");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("embedder mismatch"), "clear error: {msg}");
+        assert!(msg.contains("dim"), "names the dim conflict: {msg}");
     }
 }

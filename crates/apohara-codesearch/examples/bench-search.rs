@@ -33,7 +33,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use apohara_indexer::{
-    bm25_query, hydrate, index_repo, migrate, open_db, rrf_fuse, vector_query, HydratedHit,
+    active_embedder, bm25_query, hydrate, index_repo, migrate, open_db_with, rrf_fuse,
+    vector_query, HydratedHit, EMBED_DIM,
 };
 
 /// How deep each mode's ranked list is fetched. `recall@5`/`recall@10` are read
@@ -348,7 +349,10 @@ fn measure(corpus: &Path) -> Result<Measurement> {
     let db_path = tmp.join("bench-index.db");
 
     let result = (|| -> Result<Measurement> {
-        let conn = open_db(&db_path).context("open temp index db")?;
+        // Open the chunks_vec DDL at the active embedder's width (default
+        // feature-hash → 384). index_repo resolves the same embedder internally.
+        let dim = active_embedder(EMBED_DIM).dim();
+        let conn = open_db_with(&db_path, dim).context("open temp index db")?;
         migrate(&conn).context("migrate temp index db")?;
         index_repo(&conn, corpus).context("index bench corpus")?;
 
