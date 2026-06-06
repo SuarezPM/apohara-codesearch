@@ -33,7 +33,7 @@ use serde::Serialize;
 use crate::chunker::{chunk_file, chunk_id};
 use crate::embedder::{active_embedder, Embedder};
 use crate::parser::{parse_source_imports_exports, FunctionSignature, Language};
-use crate::schema::{verify_embedder_meta, write_embedder_meta};
+use crate::schema::{verify_embedder_meta, write_embedder_meta, MIGRATION_PLACEHOLDER_REPO_ID};
 use crate::storage::{
     insert_chunk_full_with, write_file_structural, IndexedChunk, SymbolData, EMBED_DIM,
 };
@@ -68,6 +68,14 @@ pub fn index_repo(conn: &Connection, root: &Path) -> Result<ReindexReport> {
 pub fn reindex(conn: &Connection, root: &Path, force: bool) -> Result<ReindexReport> {
     let start = Instant::now();
     let walked = walk_repo(root);
+    let repo_id = repo_id_for(root);
+
+    // Rewrite any placeholder repo_id rows left by the schema migration to this
+    // repo's REAL id. `migrate` recreates `files` with a placeholder because it
+    // does not know `root`; this is the first call that does, so it completes
+    // the migration's real-id rewrite. Idempotent: a no-op once all rows hold
+    // the real id (the placeholder only ever appears immediately post-migration).
+    rewrite_placeholder_repo_id(conn, &repo_id)?;
 
     // Resolve the active embedder once for this run. With no `gguf-embed`
     // feature / no model configured this is the feature-hash embedder (the
@@ -95,7 +103,7 @@ pub fn reindex(conn: &Connection, root: &Path, force: bool) -> Result<ReindexRep
         // opens/queries can refuse to mix incompatible embeddings.
         write_embedder_meta(conn, embedder.id(), embedder.dim()).context("stamp embedder meta")?;
         for file in &walked {
-            let written = reprocess_file(conn, root, file, embedder.as_ref())?;
+            let written = reprocess_file(conn, root, file, &repo_id, embedder.as_ref())?;
             files_indexed += 1;
             chunks += written;
         }
@@ -103,21 +111,22 @@ pub fn reindex(conn: &Connection, root: &Path, force: bool) -> Result<ReindexRep
         // Drop deleted files first: anything in `files` but not walked this run.
         let walked_paths: std::collections::HashSet<&str> =
             walked.iter().map(|f| f.rel_path.as_str()).collect();
-        for rel in stored_file_paths(conn)? {
+        for rel in stored_file_paths(conn, &repo_id)? {
             if !walked_paths.contains(rel.as_str()) {
-                remove_file(conn, &rel)?;
+                remove_file(conn, &rel, &repo_id)?;
             }
         }
 
         for file in &walked {
             let hash = blake3::hash(file.content.as_bytes()).to_hex().to_string();
             let mtime = file_mtime(root, &file.rel_path);
-            match stored_file_state(conn, &file.rel_path)? {
+            match stored_file_state(conn, &file.rel_path, &repo_id)? {
                 // Stored mtime matches and hash matches → unchanged, skip.
                 // The hash check is authoritative; mtime alone never skips.
                 Some((stored_hash, _stored_mtime)) if stored_hash == hash => continue,
                 _ => {
-                    let written = reprocess_file_with(conn, file, &hash, mtime, embedder.as_ref())?;
+                    let written =
+                        reprocess_file_with(conn, file, &hash, mtime, &repo_id, embedder.as_ref())?;
                     files_indexed += 1;
                     chunks += written;
                 }
@@ -151,17 +160,47 @@ fn wipe_all(conn: &Connection) -> Result<()> {
     .context("wipe all index tables")
 }
 
+/// Stable, collision-resistant id for the repo rooted at `root`:
+/// `blake3(canonical(root)).to_hex()`. The path is canonicalized first so the
+/// same repo addressed by different spellings (relative, symlinked) maps to one
+/// id — mirroring how `build_lock_for` canonicalizes (`server.rs:108`). Falls
+/// back to the raw path when canonicalization fails (e.g. the dir does not yet
+/// exist), so the id is still deterministic for that spelling.
+fn repo_id_for(root: &Path) -> String {
+    let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    blake3::hash(canonical.to_string_lossy().as_bytes())
+        .to_hex()
+        .to_string()
+}
+
+/// Rewrite migration-placeholder `repo_id` rows to this repo's real `repo_id`.
+///
+/// `migrate` recreates `files` with [`MIGRATION_PLACEHOLDER_REPO_ID`] because it
+/// cannot know `root`. The first `reindex`/`index_repo` (which has `root`)
+/// completes that rewrite here. Idempotent: once no placeholder rows remain this
+/// updates zero rows. Under Decision E1 (one repo per DB) every placeholder row
+/// in this DB belongs to THIS repo, so the unconditional rewrite is correct.
+fn rewrite_placeholder_repo_id(conn: &Connection, repo_id: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE files SET repo_id = ?1 WHERE repo_id = ?2",
+        params![repo_id, MIGRATION_PLACEHOLDER_REPO_ID],
+    )
+    .context("rewrite placeholder repo_id to real id")?;
+    Ok(())
+}
+
 /// Reprocess a single file for a FULL reindex: compute its hash + mtime, then
 /// delegate to [`reprocess_file_with`].
 fn reprocess_file(
     conn: &Connection,
     root: &Path,
     file: &WalkedFile,
+    repo_id: &str,
     embedder: &dyn Embedder,
 ) -> Result<usize> {
     let hash = blake3::hash(file.content.as_bytes()).to_hex().to_string();
     let mtime = file_mtime(root, &file.rel_path);
-    reprocess_file_with(conn, file, &hash, mtime, embedder)
+    reprocess_file_with(conn, file, &hash, mtime, repo_id, embedder)
 }
 
 /// Reprocess one file in ONE transaction: delete its prior rows (virtual
@@ -173,6 +212,7 @@ fn reprocess_file_with(
     file: &WalkedFile,
     hash: &str,
     mtime: i64,
+    repo_id: &str,
     embedder: &dyn Embedder,
 ) -> Result<usize> {
     let rel = file.rel_path.as_str();
@@ -241,11 +281,13 @@ fn reprocess_file_with(
                 .context("write structural rows")?;
         }
 
-        // Bookkeeping: upsert the files row with the authoritative hash + mtime.
+        // Bookkeeping: upsert the files row with the authoritative hash + mtime
+        // and the repo's REAL id (never a literal/placeholder). Under the
+        // composite PK(repo_id, path), this row is unique per (repo, path).
         conn.execute(
-            "INSERT OR REPLACE INTO files (path, blake3_hash, mtime, language) \
-             VALUES (?1, ?2, ?3, ?4)",
-            params![rel, hash, mtime, language_tag(&file.language)],
+            "INSERT OR REPLACE INTO files (path, blake3_hash, mtime, language, repo_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![rel, hash, mtime, language_tag(&file.language), repo_id],
         )
         .context("upsert files row")?;
 
@@ -269,7 +311,11 @@ fn reprocess_file_with(
 /// Remove every index row for a file that vanished from disk, in one
 /// transaction. Mirror of the delete half of [`reprocess_file_with`] plus the
 /// `files` row itself.
-fn remove_file(conn: &Connection, rel: &str) -> Result<()> {
+///
+/// `repo_id` scopes the `files` delete as defense-in-depth (Decision E1: under
+/// one-DB-per-repo `path` alone is already unique, so this predicate is
+/// belt-and-suspenders, not a correctness gate).
+fn remove_file(conn: &Connection, rel: &str, repo_id: &str) -> Result<()> {
     conn.execute_batch("BEGIN").context("begin remove txn")?;
     let result = (|| -> Result<()> {
         conn.execute(
@@ -296,7 +342,10 @@ fn remove_file(conn: &Connection, rel: &str) -> Result<()> {
             params![rel],
         )?;
         conn.execute("DELETE FROM chunks WHERE file_path = ?1", params![rel])?;
-        conn.execute("DELETE FROM files WHERE path = ?1", params![rel])?;
+        conn.execute(
+            "DELETE FROM files WHERE path = ?1 AND repo_id = ?2",
+            params![rel, repo_id],
+        )?;
         Ok(())
     })();
 
@@ -309,13 +358,14 @@ fn remove_file(conn: &Connection, rel: &str) -> Result<()> {
     }
 }
 
-/// All `path`s currently recorded in the `files` table.
-fn stored_file_paths(conn: &Connection) -> Result<Vec<String>> {
+/// All `path`s currently recorded in the `files` table for `repo_id`. The
+/// `repo_id` predicate is defense-in-depth under Decision E1 (one DB per repo).
+fn stored_file_paths(conn: &Connection, repo_id: &str) -> Result<Vec<String>> {
     let mut stmt = conn
-        .prepare("SELECT path FROM files")
+        .prepare("SELECT path FROM files WHERE repo_id = ?1")
         .context("prepare files path query")?;
     let rows = stmt
-        .query_map([], |row| row.get::<_, String>(0))
+        .query_map(params![repo_id], |row| row.get::<_, String>(0))
         .context("query files paths")?;
     let mut out = Vec::new();
     for r in rows {
@@ -324,12 +374,13 @@ fn stored_file_paths(conn: &Connection) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// The stored `(blake3_hash, mtime)` for `rel`, or `None` if not yet indexed.
-fn stored_file_state(conn: &Connection, rel: &str) -> Result<Option<(String, i64)>> {
+/// The stored `(blake3_hash, mtime)` for `(repo_id, rel)`, or `None` if not yet
+/// indexed. The `repo_id` predicate is defense-in-depth under Decision E1.
+fn stored_file_state(conn: &Connection, rel: &str, repo_id: &str) -> Result<Option<(String, i64)>> {
     let row = conn
         .query_row(
-            "SELECT blake3_hash, mtime FROM files WHERE path = ?1",
-            params![rel],
+            "SELECT blake3_hash, mtime FROM files WHERE path = ?1 AND repo_id = ?2",
+            params![rel, repo_id],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
         )
         .ok();
@@ -750,5 +801,200 @@ mod tests {
             hydrated_body2, known_body,
             "module sub-chunk stable across reindex"
         );
+    }
+
+    /// AC5: `repo_id_for` returns `blake3(canonical(root)).to_hex()` — the REAL
+    /// hash, never a literal like `'default'` or the migration placeholder. Two
+    /// distinct roots produce distinct ids; the same root is stable across calls.
+    #[test]
+    fn repo_id_for_is_blake3_of_canonical_root() {
+        let a = TempDir::new().unwrap();
+        let b = TempDir::new().unwrap();
+
+        let id_a = repo_id_for(a.path());
+        let id_b = repo_id_for(b.path());
+
+        // Real hash shape: 64 lowercase hex chars, not a literal/placeholder.
+        assert_eq!(id_a.len(), 64, "blake3 hex is 64 chars");
+        assert!(id_a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(id_a, "default");
+        assert_ne!(id_a, MIGRATION_PLACEHOLDER_REPO_ID);
+
+        // Distinct roots -> distinct ids; same root -> stable id.
+        assert_ne!(id_a, id_b, "distinct repos get distinct ids");
+        assert_eq!(id_a, repo_id_for(a.path()), "stable across calls");
+
+        // Matches the exact construction: blake3(canonical(root)).
+        let canonical = std::fs::canonicalize(a.path()).unwrap();
+        let expected = blake3::hash(canonical.to_string_lossy().as_bytes())
+            .to_hex()
+            .to_string();
+        assert_eq!(id_a, expected);
+    }
+
+    /// AC2 (real-id rewrite half): a legacy DB migrates (placeholder backfill),
+    /// then the FIRST `reindex(root)` rewrites the placeholder rows to the real
+    /// `blake3(canonical(root))` and indexes content. After it, NO row holds the
+    /// placeholder and every files row carries the real repo_id.
+    #[test]
+    fn first_reindex_rewrites_placeholder_to_real_repo_id() {
+        let src = TempDir::new().unwrap();
+        let db = TempDir::new().unwrap();
+        let root = src.path();
+        fs::write(root.join("main.rs"), "fn main_one() -> u32 { 1 }\n").unwrap();
+
+        // Build a legacy DB, migrate it (placeholder backfill happens here).
+        let conn = open_db(&db.path().join("idx.sqlite")).unwrap();
+        crate::schema::build_legacy_pre_v07_db(&conn).unwrap();
+        migrate(&conn).unwrap();
+        assert!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM files WHERE repo_id = '<MIGRATION_PLACEHOLDER_REPO_ID>'"
+            ) > 0,
+            "placeholder rows present after migrate"
+        );
+
+        // First reindex on the real root: force a full rebuild so the legacy
+        // (now placeholder) rows are wiped and rewritten with the real id, and
+        // any survivors are rewritten by rewrite_placeholder_repo_id.
+        reindex(&conn, root, true).unwrap();
+
+        let real_id = repo_id_for(root);
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM files WHERE repo_id = '<MIGRATION_PLACEHOLDER_REPO_ID>'"
+            ),
+            0,
+            "no placeholder rows remain after first reindex"
+        );
+        let all_real: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE repo_id = ?1",
+                params![real_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let total = count(&conn, "SELECT COUNT(*) FROM files");
+        assert!(total > 0, "content indexed");
+        assert_eq!(all_real, total, "every files row carries the real repo_id");
+    }
+
+    /// AC2 (placeholder rewrite WITHOUT content reindex): even an INCREMENTAL
+    /// reindex (no force) rewrites the migration placeholder to the real id on a
+    /// row whose content has NOT changed — the bookkeeping rewrite does not
+    /// require re-indexing file content.
+    #[test]
+    fn incremental_reindex_rewrites_placeholder_without_content_change() {
+        let src = TempDir::new().unwrap();
+        let db = TempDir::new().unwrap();
+        let root = src.path();
+        fs::write(root.join("keep.rs"), "fn keep_me() -> u32 { 7 }\n").unwrap();
+
+        // Index once so a real files row exists, then forge the placeholder back
+        // onto it to simulate the immediately-post-migration state.
+        let conn = migrated_db(&db);
+        reindex(&conn, root, true).unwrap();
+        conn.execute(
+            "UPDATE files SET repo_id = '<MIGRATION_PLACEHOLDER_REPO_ID>'",
+            [],
+        )
+        .unwrap();
+
+        // An incremental reindex (content unchanged → 0 files reprocessed) must
+        // still rewrite the placeholder via rewrite_placeholder_repo_id.
+        let report = reindex(&conn, root, false).unwrap();
+        assert!(report.incremental);
+        assert_eq!(
+            report.files_indexed, 0,
+            "content unchanged: nothing reprocessed"
+        );
+
+        let real_id = repo_id_for(root);
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM files WHERE repo_id = '<MIGRATION_PLACEHOLDER_REPO_ID>'"
+            ),
+            0,
+            "placeholder rewritten even with no content change"
+        );
+        let real: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE repo_id = ?1",
+                params![real_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(real > 0, "rows now carry the real id");
+    }
+
+    /// AC6 (multi-repo ISOLATION): two repos that BOTH contain `src/main.rs`
+    /// live in SEPARATE index.db files (Decision E1). Reindexing A must not
+    /// touch B's rows; B's `src/main.rs` still resolves to B's content; the two
+    /// DBs carry DISTINCT repo_ids (distinct canonical roots).
+    #[test]
+    fn multi_repo_isolation_reindex_a_leaves_b_untouched() {
+        let src_a = TempDir::new().unwrap();
+        let src_b = TempDir::new().unwrap();
+        let db_a = TempDir::new().unwrap();
+        let db_b = TempDir::new().unwrap();
+
+        // Same relative path, DIFFERENT content — the collision case.
+        fs::create_dir_all(src_a.path().join("src")).unwrap();
+        fs::create_dir_all(src_b.path().join("src")).unwrap();
+        fs::write(
+            src_a.path().join("src/main.rs"),
+            "fn main() { alpha_marker(); }\n",
+        )
+        .unwrap();
+        fs::write(
+            src_b.path().join("src/main.rs"),
+            "fn main() { beta_marker(); }\n",
+        )
+        .unwrap();
+
+        let conn_a = open_db(&db_a.path().join("idx.sqlite")).unwrap();
+        migrate(&conn_a).unwrap();
+        let conn_b = open_db(&db_b.path().join("idx.sqlite")).unwrap();
+        migrate(&conn_b).unwrap();
+
+        reindex(&conn_a, src_a.path(), true).unwrap();
+        reindex(&conn_b, src_b.path(), true).unwrap();
+
+        // Snapshot B's bodies before re-touching A.
+        let b_body_before: String = conn_b
+            .query_row(
+                "SELECT body FROM chunks WHERE file_path = 'src/main.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(b_body_before.contains("beta_marker"));
+
+        // Reindex A again; B's DB is a different file and must be byte-unchanged.
+        reindex(&conn_a, src_a.path(), true).unwrap();
+
+        let b_body_after: String = conn_b
+            .query_row(
+                "SELECT body FROM chunks WHERE file_path = 'src/main.rs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(b_body_before, b_body_after, "B's content is untouched");
+        assert!(b_body_after.contains("beta_marker") && !b_body_after.contains("alpha_marker"));
+
+        // The two DBs carry distinct repo_ids (distinct canonical roots).
+        let id_a: String = conn_a
+            .query_row("SELECT DISTINCT repo_id FROM files", [], |r| r.get(0))
+            .unwrap();
+        let id_b: String = conn_b
+            .query_row("SELECT DISTINCT repo_id FROM files", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(id_a, repo_id_for(src_a.path()));
+        assert_eq!(id_b, repo_id_for(src_b.path()));
+        assert_ne!(id_a, id_b, "distinct repos -> distinct ids");
     }
 }

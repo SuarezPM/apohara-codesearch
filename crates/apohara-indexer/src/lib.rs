@@ -17,6 +17,7 @@ pub mod embedder;
 pub mod embeddings;
 pub mod incremental;
 pub mod parser;
+pub mod registry;
 pub mod schema;
 pub mod search;
 pub mod storage;
@@ -34,9 +35,13 @@ pub use embedder::{
     EMBED_MODEL_ENV, FEATURE_HASH_ID,
 };
 
+pub use registry::{
+    load as load_registry, register, registry_path, save as save_registry, Registry,
+};
+
 pub use schema::{
     migrate, read_embedder_meta, verify_embedder_meta, write_embedder_meta, META_EMBEDDER_DIM,
-    META_EMBEDDER_ID,
+    META_EMBEDDER_ID, META_SCHEMA_VERSION, MIGRATION_PLACEHOLDER_REPO_ID, SCHEMA_VERSION,
 };
 
 pub use search::{

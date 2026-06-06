@@ -30,6 +30,7 @@ tree-sitter-go = "0.23"
 blake3 = "1.5"
 dirs = "6.0"
 ignore = "0.4"
+serde_json = "1.0"
 
 # The profile that 'dist' builds release artifacts with. dist init emits this
 # alongside the metadata table below; the release workflow's `dist build` reads
