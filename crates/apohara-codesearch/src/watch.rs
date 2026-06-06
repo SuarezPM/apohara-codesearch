@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use apohara_indexer::{
-    active_embedder, migrate, open_db_with, registry, reindex, ReindexReport, EMBED_DIM,
+    active_embedder, migrate, open_db_with, registry, reindex_with, ReindexReport, EMBED_DIM,
 };
 use notify::{recommended_watcher, RecursiveMode, Watcher};
 
@@ -65,12 +65,13 @@ fn is_index_path(root: &Path, path: &Path) -> bool {
 /// the report reflects the change. `force == false` → content-hash incremental.
 pub fn handle_change(root: &Path) -> Result<ReindexReport> {
     let db = db_path(root)?;
-    // Open the chunks_vec DDL at the ACTIVE embedder's width before reindex,
-    // which resolves the SAME embedder and stamps/verifies its (id, dim).
-    let dim = active_embedder(EMBED_DIM).dim();
-    let conn = open_db_with(&db, dim).context("open_db")?;
+    // Resolve the ACTIVE embedder ONCE: its width opens the chunks_vec DDL and the
+    // SAME embedder is threaded into reindex_with (which stamps/verifies its id,
+    // dim). One resolution per op → a real model loads once, not twice.
+    let embedder = active_embedder(EMBED_DIM);
+    let conn = open_db_with(&db, embedder.dim()).context("open_db")?;
     migrate(&conn).context("migrate")?;
-    let report = reindex(&conn, root, false).context("reindex")?;
+    let report = reindex_with(&conn, root, false, embedder.as_ref()).context("reindex")?;
     // Record the root -> db mapping in the sidecar (best-effort, never fatal).
     register_in_sidecar(root, &db);
     Ok(report)

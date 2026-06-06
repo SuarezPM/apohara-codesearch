@@ -70,7 +70,7 @@ pub use walker::{walk_repo, WalkedFile};
 
 pub use chunker::{chunk_file, chunk_id, ChunkKind, ChunkSpec};
 
-pub use incremental::{index_repo, reindex, ReindexReport};
+pub use incremental::{index_repo, index_repo_with, reindex, reindex_with, ReindexReport};
 
 /// Bundled SQLite version string (e.g. `"3.46.0"`).
 ///

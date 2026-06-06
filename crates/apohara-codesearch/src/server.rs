@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use apohara_indexer::{
     active_embedder, apply_structural_boost, bm25_query, dedup_content, dedup_overlapping, hydrate,
-    index_repo, load_embeddings, migrate, mmr_rerank, open_db_with, registry, reindex,
+    index_repo_with, load_embeddings, migrate, mmr_rerank, open_db_with, registry, reindex_with,
     resolve_weights, rrf_fuse_weighted, vector_query_with, verify_embedder_meta, EMBED_DIM,
     MMR_LAMBDA, RRF_K,
 };
@@ -150,16 +150,19 @@ fn ensure_indexed(root: &Path, db: &Path) -> Result<(), ErrorData> {
     if db.exists() {
         return Ok(());
     }
-    // Create the chunks_vec DDL at the ACTIVE embedder's width (default 384 with
-    // feature-hash; 768/256 with a real model) BEFORE the index is built — the
-    // width is fixed at table creation, and `index_repo` below resolves the SAME
-    // embedder and stamps its (id, dim) into meta on first write.
-    let dim = active_embedder(EMBED_DIM).dim();
-    let conn = open_db_with(db, dim).map_err(|e| internal(format!("open_db: {e}")))?;
+    // Resolve the ACTIVE embedder ONCE for this whole operation. Its width
+    // (default 384 with feature-hash; 768/256 with a real model) creates the
+    // chunks_vec DDL BEFORE the index is built — the width is fixed at table
+    // creation. The SAME embedder is then threaded into index_repo_with, so a
+    // real model (gguf-embed) is loaded once, not twice (resolve here + re-resolve
+    // inside index_repo).
+    let embedder = active_embedder(EMBED_DIM);
+    let conn = open_db_with(db, embedder.dim()).map_err(|e| internal(format!("open_db: {e}")))?;
     migrate(&conn).map_err(|e| internal(format!("migrate: {e}")))?;
-    // Lazy first-index MUST go through index_repo (insert_chunk_full), never the
-    // quarantined insert_chunk primitive.
-    index_repo(&conn, root).map_err(|e| internal(format!("index_repo: {e}")))?;
+    // Lazy first-index MUST go through index_repo_with (insert_chunk_full), never
+    // the quarantined insert_chunk primitive.
+    index_repo_with(&conn, root, embedder.as_ref())
+        .map_err(|e| internal(format!("index_repo: {e}")))?;
     // Record the new root -> db mapping in the sidecar (best-effort, never fatal).
     register_in_sidecar(root, db);
     Ok(())
@@ -280,12 +283,14 @@ impl CodeSearchServer {
     ) -> Result<Json<ReindexReportDto>, ErrorData> {
         let root = PathBuf::from(&path);
         let db = db_path(&root)?;
-        // Open the chunks_vec DDL at the ACTIVE embedder's width before reindex,
-        // which resolves the SAME embedder and stamps/verifies its (id, dim).
-        let dim = active_embedder(EMBED_DIM).dim();
-        let conn = open_db_with(&db, dim).map_err(|e| internal(format!("open_db: {e}")))?;
+        // Resolve the ACTIVE embedder ONCE: its width opens the chunks_vec DDL and
+        // the SAME embedder is threaded into reindex_with (which stamps/verifies
+        // its id, dim). One resolution per op → a real model loads once, not twice.
+        let embedder = active_embedder(EMBED_DIM);
+        let conn =
+            open_db_with(&db, embedder.dim()).map_err(|e| internal(format!("open_db: {e}")))?;
         migrate(&conn).map_err(|e| internal(format!("migrate: {e}")))?;
-        let report = reindex(&conn, &root, force.unwrap_or(false))
+        let report = reindex_with(&conn, &root, force.unwrap_or(false), embedder.as_ref())
             .map_err(|e| internal(format!("reindex: {e}")))?;
         // Keep the sidecar's root -> db mapping fresh on every reindex
         // (best-effort: a registry failure must not fail the reindex).

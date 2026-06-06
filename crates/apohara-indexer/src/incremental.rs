@@ -55,17 +55,53 @@ pub struct ReindexReport {
 
 /// Full reindex convenience wrapper (used by the MCP server's lazy first-index).
 /// Equivalent to `reindex(conn, root, true)`.
+///
+/// Resolves [`active_embedder`] ONCE and delegates to [`index_repo_with`]. Hot
+/// paths that already hold a resolved embedder (the MCP server, watch) must call
+/// [`index_repo_with`] directly to avoid loading a real model twice.
 pub fn index_repo(conn: &Connection, root: &Path) -> Result<ReindexReport> {
-    reindex(conn, root, true)
+    let embedder = active_embedder(EMBED_DIM);
+    index_repo_with(conn, root, embedder.as_ref())
+}
+
+/// Full reindex with a caller-supplied `embedder`. Equivalent to
+/// `reindex_with(conn, root, true, embedder)`.
+pub fn index_repo_with(
+    conn: &Connection,
+    root: &Path,
+    embedder: &dyn Embedder,
+) -> Result<ReindexReport> {
+    reindex_with(conn, root, true, embedder)
 }
 
 /// (Re)index `root` into the already-migrated `conn`.
+///
+/// Thin wrapper that resolves [`active_embedder`] ONCE and delegates to
+/// [`reindex_with`]. Hot paths that already hold a resolved embedder (and use its
+/// `.dim()` to open the DB) must call [`reindex_with`] directly so a real model
+/// is never loaded twice for one operation.
 ///
 /// - `force == true`: delete every row from all index tables in one transaction,
 ///   then fully (re)index every walked file. `incremental = false`.
 /// - `force == false`: hash each walked file and reprocess only changed/new
 ///   files; remove rows for files that vanished from disk. `incremental = true`.
 pub fn reindex(conn: &Connection, root: &Path, force: bool) -> Result<ReindexReport> {
+    let embedder = active_embedder(EMBED_DIM);
+    reindex_with(conn, root, force, embedder.as_ref())
+}
+
+/// (Re)index `root` with a caller-supplied `embedder`.
+///
+/// The embedder is resolved by the CALLER (once per operation) and threaded in,
+/// so a hot path that already needs the embedder's `.dim()` to open the DB does
+/// NOT re-resolve it here — avoiding a duplicate model load with `gguf-embed`.
+/// Behaviour is otherwise identical to [`reindex`].
+pub fn reindex_with(
+    conn: &Connection,
+    root: &Path,
+    force: bool,
+    embedder: &dyn Embedder,
+) -> Result<ReindexReport> {
     let start = Instant::now();
     let walked = walk_repo(root);
     let repo_id = repo_id_for(root);
@@ -77,12 +113,11 @@ pub fn reindex(conn: &Connection, root: &Path, force: bool) -> Result<ReindexRep
     // the real id (the placeholder only ever appears immediately post-migration).
     rewrite_placeholder_repo_id(conn, &repo_id)?;
 
-    // Resolve the active embedder once for this run. With no `gguf-embed`
-    // feature / no model configured this is the feature-hash embedder (the
-    // no-model default). A `force` reindex re-stamps the index meta with the active
-    // embedder; an incremental reindex must NOT mix embedders, so it refuses if
-    // the stored meta disagrees with the active one.
-    let embedder = active_embedder(EMBED_DIM);
+    // The active embedder is supplied by the caller (resolved once per
+    // operation). With no `gguf-embed` feature / no model configured this is the
+    // feature-hash embedder (the no-model default). A `force` reindex re-stamps
+    // the index meta with this embedder; an incremental reindex must NOT mix
+    // embedders, so it refuses if the stored meta disagrees with this one.
     if !force {
         verify_embedder_meta(conn, embedder.id(), embedder.dim())
             .context("verify embedder matches index")?;
@@ -103,7 +138,7 @@ pub fn reindex(conn: &Connection, root: &Path, force: bool) -> Result<ReindexRep
         // opens/queries can refuse to mix incompatible embeddings.
         write_embedder_meta(conn, embedder.id(), embedder.dim()).context("stamp embedder meta")?;
         for file in &walked {
-            let written = reprocess_file(conn, root, file, &repo_id, embedder.as_ref())?;
+            let written = reprocess_file(conn, root, file, &repo_id, embedder)?;
             files_indexed += 1;
             chunks += written;
         }
@@ -126,7 +161,7 @@ pub fn reindex(conn: &Connection, root: &Path, force: bool) -> Result<ReindexRep
                 Some((stored_hash, _stored_mtime)) if stored_hash == hash => continue,
                 _ => {
                     let written =
-                        reprocess_file_with(conn, file, &hash, mtime, &repo_id, embedder.as_ref())?;
+                        reprocess_file_with(conn, file, &hash, mtime, &repo_id, embedder)?;
                     files_indexed += 1;
                     chunks += written;
                 }
