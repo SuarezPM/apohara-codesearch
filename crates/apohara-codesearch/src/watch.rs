@@ -12,7 +12,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use apohara_indexer::{migrate, open_db, reindex, ReindexReport};
+use apohara_indexer::{migrate, open_db, registry, reindex, ReindexReport};
 use notify::{recommended_watcher, RecursiveMode, Watcher};
 
 /// Sub-directory under the repo root holding the index database (mirrors the
@@ -34,6 +34,20 @@ fn db_path(root: &Path) -> Result<PathBuf> {
     Ok(dir.join("index.db"))
 }
 
+/// Best-effort record `root -> db` in the shared sidecar registry. The registry
+/// is an AUXILIARY map (never read on the reindex path, which resolves the db by
+/// `db_path(root)`); a failure here must NEVER kill the watch loop, so any error
+/// is logged to STDERR and swallowed. Mirrors the server's `register_in_sidecar`.
+fn register_in_sidecar(root: &Path, db: &Path) {
+    let result = registry::registry_path().and_then(|p| registry::register(&p, root, db));
+    if let Err(e) = result {
+        eprintln!(
+            "apohara-codesearch: registry update skipped (best-effort) for {}: {e:#}",
+            root.display()
+        );
+    }
+}
+
 /// True when `path` lies inside the `<root>/.apohara-codesearch/` index dir.
 /// The walker already excludes that dir from *indexing*; the watcher must also
 /// ignore *events* under it so a reindex's own writes (index.db, `-wal`, `-shm`)
@@ -51,7 +65,10 @@ pub fn handle_change(root: &Path) -> Result<ReindexReport> {
     let db = db_path(root)?;
     let conn = open_db(&db).context("open_db")?;
     migrate(&conn).context("migrate")?;
-    reindex(&conn, root, false).context("reindex")
+    let report = reindex(&conn, root, false).context("reindex")?;
+    // Record the root -> db mapping in the sidecar (best-effort, never fatal).
+    register_in_sidecar(root, &db);
+    Ok(report)
 }
 
 /// Run the blocking filesystem-watch loop over `root`.
@@ -168,11 +185,95 @@ mod tests {
     use super::*;
     use std::fs;
     use std::sync::mpsc::Sender;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::TempDir;
+
+    /// Serializes tests that mutate the process-global `XDG_CONFIG_HOME`, which
+    /// steers `registry::registry_path()` at a tempdir. Cargo runs a crate's
+    /// tests on parallel threads of ONE process, so an env var is shared state;
+    /// this guard keeps two such tests from clobbering each other's setting.
+    fn env_guard() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     /// Seed a tiny repo with one Rust source file.
     fn seed_repo(root: &Path) {
         fs::write(root.join("lib.rs"), "pub fn original() -> u32 { 1 }\n").unwrap();
+    }
+
+    /// AC: a successful reindex through the watch path records the repo's
+    /// `root -> index.db` mapping in the sidecar registry. We point
+    /// `XDG_CONFIG_HOME` at a tempdir so `registry_path()` resolves there and the
+    /// real user registry is never touched, then assert the entry landed.
+    #[test]
+    fn handle_change_registers_root_in_sidecar() {
+        let _g = env_guard().lock().unwrap_or_else(|e| e.into_inner());
+
+        let repo = TempDir::new().unwrap();
+        let root = repo.path();
+        seed_repo(root);
+
+        // Redirect the registry's config dir at an isolated tempdir for this test.
+        let cfg = TempDir::new().unwrap();
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", cfg.path());
+
+        let report = handle_change(root);
+
+        // Capture the registry state under the same env before restoring it, so a
+        // later assertion failure cannot leak the override into other tests.
+        let reg_path = registry::registry_path().unwrap();
+        let loaded = registry::load(&reg_path).unwrap();
+
+        match prev {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+
+        report.expect("reindex through the watch path succeeds");
+        let db = root.join(INDEX_DIR).join("index.db");
+        assert_eq!(
+            loaded.get(root),
+            Some(&db),
+            "the sidecar registry maps root -> index.db after a successful reindex"
+        );
+    }
+
+    /// AC: a registry failure is best-effort — it must NOT fail the reindex.
+    /// We force `registry_path()` to fail by pointing `XDG_CONFIG_HOME` at a path
+    /// whose parent is a regular file (so `create_dir_all` cannot make the config
+    /// dir), then assert `handle_change` still returns Ok.
+    #[test]
+    fn registry_failure_does_not_break_reindex() {
+        let _g = env_guard().lock().unwrap_or_else(|e| e.into_inner());
+
+        let repo = TempDir::new().unwrap();
+        let root = repo.path();
+        seed_repo(root);
+
+        // A regular file standing where a directory must be: create_dir_all under
+        // it fails with NotADirectory, so registry_path() errors out.
+        let blocker = TempDir::new().unwrap();
+        let file = blocker.path().join("not-a-dir");
+        fs::write(&file, b"x").unwrap();
+        let bad_cfg = file.join("xdg"); // parent (`file`) is a file, not a dir
+
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &bad_cfg);
+
+        let report = handle_change(root);
+
+        match prev {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+
+        let report = report.expect("a registry failure must not fail the reindex");
+        assert_eq!(
+            report.files_indexed, 1,
+            "the index still ran despite the registry write failing"
+        );
     }
 
     /// Mutating a file under the watched root makes the *next* incremental

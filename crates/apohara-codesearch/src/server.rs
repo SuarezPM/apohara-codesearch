@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use apohara_indexer::{
     active_embedder, apply_structural_boost, bm25_query, dedup_content, dedup_overlapping, hydrate,
-    index_repo, load_embeddings, migrate, mmr_rerank, open_db, reindex, resolve_weights,
+    index_repo, load_embeddings, migrate, mmr_rerank, open_db, registry, reindex, resolve_weights,
     rrf_fuse_weighted, vector_query_with, verify_embedder_meta, EMBED_DIM, MMR_LAMBDA, RRF_K,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -104,6 +104,20 @@ fn db_path(root: &Path) -> Result<PathBuf, ErrorData> {
     Ok(dir.join("index.db"))
 }
 
+/// Best-effort record `root -> db` in the shared sidecar registry. The registry
+/// is an AUXILIARY map (it is never read on the search/reindex path, which
+/// resolves the db by `db_path(root)`); a failure here must NEVER fail an index
+/// or search, so any error is logged to STDERR and swallowed.
+fn register_in_sidecar(root: &Path, db: &Path) {
+    let result = registry::registry_path().and_then(|p| registry::register(&p, root, db));
+    if let Err(e) = result {
+        eprintln!(
+            "apohara-codesearch: registry update skipped (best-effort) for {}: {e:#}",
+            root.display()
+        );
+    }
+}
+
 /// Process-level map of per-repo build locks, keyed by canonical repo path.
 /// Guarantees two racing `search_code` calls on the same repo do not both run
 /// the lazy first-index concurrently (which would double-build the database).
@@ -140,6 +154,8 @@ fn ensure_indexed(root: &Path, db: &Path) -> Result<(), ErrorData> {
     // Lazy first-index MUST go through index_repo (insert_chunk_full), never the
     // quarantined insert_chunk primitive.
     index_repo(&conn, root).map_err(|e| internal(format!("index_repo: {e}")))?;
+    // Record the new root -> db mapping in the sidecar (best-effort, never fatal).
+    register_in_sidecar(root, db);
     Ok(())
 }
 
@@ -258,6 +274,9 @@ impl CodeSearchServer {
         migrate(&conn).map_err(|e| internal(format!("migrate: {e}")))?;
         let report = reindex(&conn, &root, force.unwrap_or(false))
             .map_err(|e| internal(format!("reindex: {e}")))?;
+        // Keep the sidecar's root -> db mapping fresh on every reindex
+        // (best-effort: a registry failure must not fail the reindex).
+        register_in_sidecar(&root, &db);
         Ok(Json(report.into()))
     }
 }
