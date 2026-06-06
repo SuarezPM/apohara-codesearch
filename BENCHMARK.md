@@ -351,3 +351,109 @@ django), hybrid never beats BM25-alone, and raising the caps only dilutes chunks
 (measurably so on django). No cap change is warranted. The same honest caveat
 holds: a learned embedder (1b) is the lever that could change the vector column;
 that is what OQ-3 will re-measure, not the caps.
+
+## CodeSearchNet `{NL query → code}` benchmark (one-off, not in CI, corpus not vendored)
+
+> Recall@5 / MRR over the **standard CodeSearchNet** corpus — a recognized public
+> `{NL query → code}` dataset, not an author-curated one — so the fusion claims
+> here are falsifiable against prior art, not only against our own labels. This
+> **extends** the sections above; it does not replace them, and it PRESERVES the
+> same frozen honesty contract: relevance by `(file, target_line)` (not chunk-id),
+> a per-slice known-miss rate ≥ 30%, the reported "hybrid worse than best single
+> mode" count, and twice-run byte-identical determinism.
+
+**Prior-art reconciliation.** The headline finding of the sections above is that
+the hybrid LOSES to BM25-only on every real-OSS corpus with the feature-hash
+backend (the "fusion tax"). This CSN slice is added to test that same picture on a
+recognized dataset and reports it honestly — including losses — not a curated win.
+
+**Dataset — version / split / provenance (reproducibility).**
+
+| Field | Value |
+|-------|-------|
+| Dataset | CodeSearchNet corpus (Husain et al. 2019, [arXiv:1909.09436](https://arxiv.org/abs/1909.09436); [github/CodeSearchNet](https://github.com/github/CodeSearchNet#data)) |
+| Source mirror | `https://huggingface.co/datasets/code-search-net/code_search_net` (per-language `<lang>/final/jsonl/test/<lang>_test_<n>.jsonl.gz`) |
+| Split | **test** split only (held-out evaluation split; train/valid are NOT used) |
+| Languages | python, go, javascript — JavaScript is materialized as the **typescript** slice (`.ts`) because CodeSearchNet has NO TypeScript split and TS/JS share a parser family; it is the closest public NL→code proxy for our first-class TypeScript support |
+| Records per slice | a deterministic file-order prefix of up to 200 usable records (records with an empty docstring or empty code are skipped) — keeps a run tractable AND byte-stable |
+| NL query | the first non-empty line of each record's `docstring` (the CSN challenge's summary-line convention) |
+
+**Checksum (record it yourself — do not trust a number you did not compute).** The
+fetch helper does NOT bake in a sha256, because the upstream shards can be
+re-published and a stale baked-in sum that silently disagrees is worse than one
+recomputed and committed deliberately. After fetching, compute and paste the three
+sums here so a second machine can verify byte-identical inputs:
+
+```bash
+sha256sum "$APOHARA_CSN_ROOT"/{python,go,typescript}.jsonl
+```
+
+| File | sha256 |
+|------|--------|
+| `python.jsonl` | `<paste after running scripts/fetch-csn.sh>` |
+| `go.jsonl` | `<paste after running scripts/fetch-csn.sh>` |
+| `typescript.jsonl` | `<paste after running scripts/fetch-csn.sh>` |
+
+The dataset VERSION (the test split at the source above) is the reproducibility
+anchor; the sha256 you record pins the exact bytes you measured.
+
+**Harness:** `crates/apohara-codesearch/examples/bench-codesearchnet.rs` — an
+*example* (never packaged by dist), mirroring `bench-external.rs`: env-gated by
+`APOHARA_CSN_ROOT`, twice-run byte-identical determinism assertion, `(file,
+target_line)` relevance. It reports **FOUR** arms — BM25-only, vector-only,
+hybrid-RRF, and **hybrid+MMR** (the diversity re-rank `mmr_rerank` / `MMR_LAMBDA`
+applied AFTER fusion — additive signal the existing three arms do not measure) —
+plus the "queries where hybrid < best single mode" count, per slice.
+
+**Dataset fetch (deliberate, standalone).** `scripts/fetch-csn.sh` downloads the
+test-split shards and writes `python.jsonl` / `go.jsonl` / `typescript.jsonl`
+under `$APOHARA_CSN_ROOT`. It is a plain shell script **NOT invocable by any cargo
+target** (no `build.rs`, no `[[example]]`, no test references it), so no `cargo`
+command can trigger a network fetch — the "zero network in any cargo command"
+contract holds.
+
+```bash
+bash scripts/fetch-csn.sh /path/to/csn
+APOHARA_CSN_ROOT=/path/to/csn cargo run --release --example bench-codesearchnet
+```
+
+Unset `APOHARA_CSN_ROOT` → the harness prints guidance and exits 0 (no network, no
+hard dependency). Default (feature-hash) embedder, release binary.
+
+**Results (per slice — python, go, typescript first-class).** Run the harness
+against the fetched corpus and paste the four-arm table for each slice below. The
+per-slice known-miss rate (queries the hybrid ranks outside top-k) must read ≥ 30%
+— if a slice reports below the floor, that is a labeling/loader signal to
+investigate, not a number to massage.
+
+| Slice | known-miss | mode | recall@5 | recall@10 | MRR |
+|-------|-----------|------|----------|-----------|-----|
+| python (N q) | `<≥30%>` | BM25-only | `<r@5>` | `<r@10>` | `<MRR>` |
+| | | vector-only | `<r@5>` | `<r@10>` | `<MRR>` |
+| | | hybrid (RRF) | `<r@5>` | `<r@10>` | `<MRR>` |
+| | | hybrid+MMR | `<r@5>` | `<r@10>` | `<MRR>` |
+| go (N q) | `<≥30%>` | BM25-only | `<r@5>` | `<r@10>` | `<MRR>` |
+| | | vector-only | `<r@5>` | `<r@10>` | `<MRR>` |
+| | | hybrid (RRF) | `<r@5>` | `<r@10>` | `<MRR>` |
+| | | hybrid+MMR | `<r@5>` | `<r@10>` | `<MRR>` |
+| typescript (N q) | `<≥30%>` | BM25-only | `<r@5>` | `<r@10>` | `<MRR>` |
+| | | vector-only | `<r@5>` | `<r@10>` | `<MRR>` |
+| | | hybrid (RRF) | `<r@5>` | `<r@10>` | `<MRR>` |
+| | | hybrid+MMR | `<r@5>` | `<r@10>` | `<MRR>` |
+
+**"Hybrid worse than best single mode" count (per slice):** python `<n>`, go
+`<n>`, typescript `<n>` — paste from the harness output. The prior-art expectation
+(documented above) is that hybrid does NOT beat BM25-alone with the feature-hash
+backend; this count makes any fusion tax explicit per slice.
+
+**Determinism:** metrics are byte-stable. The harness measures each slice twice and
+asserts the two metric sets identical before printing; two *separate* process
+invocations also produce byte-identical stdout (verifiable with `sha256sum`),
+because the feature-hash embedder is deterministic and the RRF tie-break is total —
+there is no RNG / seed in this path.
+
+> The result tables above are placeholders until the corpus is fetched on the
+> measuring machine (the dataset is never vendored). The harness, the four arms,
+> the determinism gate, and the metric unit tests (`cargo test -p
+> apohara-codesearch --example bench-codesearchnet`) all ship and pass with the
+> corpus absent; the numbers are filled in by whoever runs the fetch + bench.
