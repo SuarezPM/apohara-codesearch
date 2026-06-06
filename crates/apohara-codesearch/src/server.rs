@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use apohara_indexer::{
     active_embedder, apply_structural_boost, bm25_query, dedup_content, dedup_overlapping, hydrate,
-    index_repo, load_embeddings, migrate, mmr_rerank, open_db, reindex, rrf_fuse_weighted,
-    vector_query_with, verify_embedder_meta, EMBED_DIM, MMR_LAMBDA, RRF_K,
+    index_repo, load_embeddings, migrate, mmr_rerank, open_db, reindex, resolve_weights,
+    rrf_fuse_weighted, vector_query_with, verify_embedder_meta, EMBED_DIM, MMR_LAMBDA, RRF_K,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
@@ -39,10 +39,21 @@ pub struct SearchCodeParams {
     /// RRF constant `k_rrf` (defaults to 60). Larger flattens top-rank
     /// contributions; smaller sharpens reordering.
     pub rrf_k: Option<usize>,
-    /// Weight on the BM25 (lexical) list's RRF contribution (defaults to 1.0).
+    /// Weight on the BM25 (lexical) list's RRF contribution. When set, this
+    /// explicit value always wins, even with `adaptive=true`. Defaults to the
+    /// adaptive heuristic if `adaptive=true`, else 1.0.
     pub bm25_weight: Option<f64>,
-    /// Weight on the vector list's RRF contribution (defaults to 1.0).
+    /// Weight on the vector list's RRF contribution. When set, this explicit
+    /// value always wins, even with `adaptive=true`. Defaults to the adaptive
+    /// heuristic if `adaptive=true`, else 1.0.
     pub vector_weight: Option<f64>,
+    /// Opt-in adaptive fusion: pick the fusion weights from the SHAPE of the
+    /// query (identifier/snake_case/camelCase → BM25-heavy; multi-word NL →
+    /// vector-heavy). Only fills weights the caller left unset; an explicit
+    /// `bm25_weight`/`vector_weight` always overrides it. Defaults to false.
+    /// LIMITATION: lexical-only, no corpus signal — and the vector arm is
+    /// near-noise with the default feature-hash embedder (see BENCHMARK.md).
+    pub adaptive: Option<bool>,
     /// Apply Maximal Marginal Relevance diversity re-ranking after fusion +
     /// dedup (defaults to false → plain fused order).
     pub diversify: Option<bool>,
@@ -138,7 +149,7 @@ impl CodeSearchServer {
     /// builds the index on first use, then returns the top-k hydrated hits.
     #[tool(
         name = "search_code",
-        description = "Search a code repository with hybrid BM25 + vector retrieval (RRF-fused). Lazily indexes the repo on first call. Returns the top-k hydrated chunks with file, line range, kind, signature, snippet, score, and the file's imports/exports."
+        description = "Search a code repository with hybrid BM25 + vector retrieval (RRF-fused). Lazily indexes the repo on first call. Returns the top-k hydrated chunks with file, line range, kind, signature, snippet, score, and the file's imports/exports. Set adaptive=true (opt-in, default off) to pick fusion weights from the query shape (identifier/snake_case/camelCase up-weight BM25; multi-word NL up-weights vector); explicit bm25_weight/vector_weight always override it. LIMITATION: adaptive is lexical-only (no corpus signal) and the vector arm is near-noise with the default feature-hash embedder."
     )]
     async fn search_code(
         &self,
@@ -149,6 +160,7 @@ impl CodeSearchServer {
             rrf_k,
             bm25_weight,
             vector_weight,
+            adaptive,
             diversify,
             boost_imports,
         }): Parameters<SearchCodeParams>,
@@ -159,8 +171,15 @@ impl CodeSearchServer {
 
         let k = k.unwrap_or(DEFAULT_K);
         let rrf_k = rrf_k.unwrap_or(RRF_K);
-        let bm25_weight = bm25_weight.unwrap_or(1.0);
-        let vector_weight = vector_weight.unwrap_or(1.0);
+        // Defer the weight unwrap until AFTER the adaptive branch: resolve_weights
+        // keeps the caller's Option<f64> intent alive so an explicit weight wins
+        // over the heuristic (precedence: explicit > adaptive > 1.0/1.0 default).
+        let (bm25_weight, vector_weight) = resolve_weights(
+            bm25_weight,
+            vector_weight,
+            adaptive.unwrap_or(false),
+            &query,
+        );
         let diversify = diversify.unwrap_or(false);
         let boost_imports = boost_imports.unwrap_or(false);
         let conn = open_db(&db).map_err(|e| internal(format!("open_db: {e}")))?;
@@ -261,4 +280,38 @@ impl ServerHandler for CodeSearchServer {
 /// Build an internal-error `ErrorData` from a message.
 fn internal(msg: String) -> ErrorData {
     ErrorData::internal_error(msg, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // These guard the exact precedence the search_code handler wires through
+    // resolve_weights (server.rs ~line 162). They exercise the same function the
+    // handler calls, so the async DB path does not need to be stood up to test
+    // the weight-resolution contract.
+
+    /// AC2: an explicit caller weight wins over adaptive, even on an identifier
+    /// query the heuristic would otherwise bias BM25-heavy.
+    #[test]
+    fn search_code_explicit_weights_override_adaptive() {
+        let (bm25, vector) = resolve_weights(Some(0.25), Some(0.75), true, "parse_config");
+        assert_eq!((bm25, vector), (0.25, 0.75));
+    }
+
+    /// AC3: adaptive absent/false with no explicit weights resolves to the legacy
+    /// 1.0/1.0 default — the same weights the pre-adaptive handler passed in.
+    #[test]
+    fn search_code_default_is_legacy_neutral() {
+        let (bm25, vector) = resolve_weights(None, None, false, "parse_config");
+        assert_eq!((bm25, vector), (1.0, 1.0));
+    }
+
+    /// Adaptive on with no explicit weights drives the heuristic; an identifier
+    /// query is BM25-heavy.
+    #[test]
+    fn search_code_adaptive_identifier_is_bm25_heavy() {
+        let (bm25, vector) = resolve_weights(None, None, true, "parse_config");
+        assert!(bm25 > vector);
+    }
 }

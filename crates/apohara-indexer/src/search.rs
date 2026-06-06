@@ -187,6 +187,129 @@ pub fn rrf_fuse_weighted(
     out
 }
 
+/// Adaptive-fusion weights, biased BM25-heavy for queries that look like a
+/// lexical/identifier lookup. Used only when no caller weight is set.
+const ADAPTIVE_BM25_HEAVY: (f64, f64) = (2.0, 1.0);
+
+/// Adaptive-fusion weights, biased vector-heavy for multi-word natural-language
+/// phrases (the conceptual end of the spectrum).
+const ADAPTIVE_VECTOR_HEAVY: (f64, f64) = (1.0, 2.0);
+
+/// Adaptive-fusion neutral weights when the query gives no clear lexical signal.
+const ADAPTIVE_NEUTRAL: (f64, f64) = (1.0, 1.0);
+
+/// Pick `(bm25_weight, vector_weight)` from the SHAPE of the query string.
+///
+/// Heuristic, in priority order:
+/// - A single bare token that is an identifier (snake_case, camelCase, or any
+///   token carrying `_`/digits/a case boundary) → BM25-heavy: it is almost
+///   certainly an exact-symbol lookup the lexical index serves best.
+/// - A single plain lowercase word → neutral: a one-word query is ambiguous
+///   between a symbol and a concept, so we do not bias either way.
+/// - Multiple words → vector-heavy: a multi-word phrase reads as a
+///   natural-language description, the conceptual case the vector arm targets.
+///
+/// KNOWN LIMITATION (lexical-only, no corpus signal). This looks ONLY at the
+/// query string; it never consults `symbols.name` or any index statistic. So it
+/// cannot disambiguate a token that is BOTH a real identifier AND a concept —
+/// e.g. `parseConfig` is camelCase (→ BM25-heavy here) yet also a plausible NL
+/// concept, and without knowing whether `parseConfig` actually exists in the
+/// corpus the choice is a guess. Worse, with the feature-hash embedder that is
+/// the default backend the vector arm is near-noise (see `BENCHMARK.md`), so the
+/// vector-heavy branch can only help once a real learned embedder is wired. Treat
+/// this as a cheap prior, not a classifier — which is why adaptive fusion is
+/// opt-in and OFF by default.
+pub fn classify_query_weights(query: &str) -> (f64, f64) {
+    let words: Vec<&str> = query.split_whitespace().collect();
+    match words.as_slice() {
+        // Empty / whitespace-only: nothing to bias on.
+        [] => ADAPTIVE_NEUTRAL,
+        // Exactly one token: BM25-heavy only when it looks like an identifier.
+        [single] => {
+            if looks_like_identifier(single) {
+                ADAPTIVE_BM25_HEAVY
+            } else {
+                ADAPTIVE_NEUTRAL
+            }
+        }
+        // Multiple words read as a natural-language phrase → vector-heavy.
+        _ => ADAPTIVE_VECTOR_HEAVY,
+    }
+}
+
+/// A token "looks like an identifier" when it carries a structural signal a
+/// plain English word would not: an underscore (snake_case), a digit, or an
+/// internal lower→upper case boundary (camelCase / PascalCase). A bare
+/// all-lowercase word (e.g. `parse`) is intentionally NOT treated as an
+/// identifier — it is indistinguishable from an ordinary search term.
+///
+/// Intentionally NOT covered (fall through to neutral, by design): a
+/// single-component PascalCase token (`User` has no internal lower→upper
+/// boundary) and `kebab-case` (the 4 supported languages use snake/camel for
+/// identifiers, not kebab) — both rare enough as exact-symbol queries that the
+/// neutral default is the safe choice over a false BM25 bias.
+fn looks_like_identifier(token: &str) -> bool {
+    if token.contains('_') || token.chars().any(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    // Internal case boundary: a lowercase char immediately followed by uppercase.
+    token
+        .chars()
+        .zip(token.chars().skip(1))
+        .any(|(a, b)| a.is_lowercase() && b.is_uppercase())
+}
+
+/// Resolve the final `(bm25_weight, vector_weight)` for a fusion call, keeping
+/// the caller's `Option<f64>` intentions alive past the adaptive decision.
+///
+/// Precedence (HIGH→LOW), evaluated per axis so an explicit weight on one axis
+/// does not force the other:
+/// 1. An explicit `Some(w)` from the caller always wins — even with `adaptive`
+///    on, an explicit weight is never overridden by the heuristic.
+/// 2. Otherwise, when `adaptive` is true, the unset axes come from
+///    [`classify_query_weights`].
+/// 3. Otherwise the unset axes default to `1.0` (the byte-identical legacy
+///    behavior — see `rrf_fuse_weighted_equal_weights_matches_current`).
+///
+/// Each resolved axis is sanitized to a finite, non-negative weight: a caller
+/// (the MCP boundary) could pass a negative weight — which would silently INVERT
+/// the rank contribution — or a non-finite one — which would destabilize the
+/// sort. Negative → `0.0` (that arm simply does not contribute), non-finite →
+/// `1.0` (neutral). The legacy `1.0` default and any sane explicit weight pass
+/// through unchanged, so this does not affect the byte-identical regression.
+pub fn resolve_weights(
+    bm25_weight: Option<f64>,
+    vector_weight: Option<f64>,
+    adaptive: bool,
+    query: &str,
+) -> (f64, f64) {
+    // Heuristic is consulted ONLY when adaptive is on; otherwise the unset-axis
+    // fallback is the legacy 1.0/1.0 default.
+    let (adaptive_bm25, adaptive_vec) = if adaptive {
+        classify_query_weights(query)
+    } else {
+        ADAPTIVE_NEUTRAL
+    };
+    (
+        sanitize_weight(bm25_weight.unwrap_or(adaptive_bm25)),
+        sanitize_weight(vector_weight.unwrap_or(adaptive_vec)),
+    )
+}
+
+/// Coerce a fusion weight to a usable value: non-finite (NaN/±inf) → `1.0`
+/// (neutral, keeps the sort stable); negative → `0.0` (drops that arm rather
+/// than inverting its contribution). Finite non-negative weights are returned
+/// unchanged.
+fn sanitize_weight(w: f64) -> f64 {
+    if !w.is_finite() {
+        1.0
+    } else if w < 0.0 {
+        0.0
+    } else {
+        w
+    }
+}
+
 /// Stage-A overlap threshold (1c): two same-file ranges that overlap by MORE
 /// than this fraction of the SHORTER range are treated as near-duplicates.
 /// Strict `>` against this constant — an exact-50% window-boundary overlap is
@@ -892,6 +1015,122 @@ mod tests {
         assert!(
             bm_score > ve_score,
             "2:1 bm25 weight strictly outscores the vector-only id"
+        );
+    }
+
+    // ---- adaptive weight classification (AC1) ----
+
+    /// A single snake_case identifier biases BM25-heavy (lexical lookup).
+    #[test]
+    fn classify_snake_case_identifier_is_bm25_heavy() {
+        let (bm25, vector) = classify_query_weights("parse_config");
+        assert!(
+            bm25 > vector,
+            "snake_case single token should up-weight BM25, got {bm25}/{vector}"
+        );
+    }
+
+    /// A single camelCase identifier biases BM25-heavy.
+    #[test]
+    fn classify_camel_case_identifier_is_bm25_heavy() {
+        let (bm25, vector) = classify_query_weights("parseConfig");
+        assert!(
+            bm25 > vector,
+            "camelCase single token should up-weight BM25, got {bm25}/{vector}"
+        );
+    }
+
+    /// A multi-word NL phrase biases vector-heavy (conceptual lookup).
+    #[test]
+    fn classify_multiword_phrase_is_vector_heavy() {
+        let (bm25, vector) = classify_query_weights("read a file from disk into a string");
+        assert!(
+            vector > bm25,
+            "multi-word NL phrase should up-weight vector, got {bm25}/{vector}"
+        );
+    }
+
+    /// A single plain lowercase word is ambiguous → neutral (no bias either way).
+    #[test]
+    fn classify_single_plain_word_is_neutral() {
+        let (bm25, vector) = classify_query_weights("parse");
+        assert_eq!(
+            (bm25, vector),
+            (1.0, 1.0),
+            "a bare lowercase word should not bias either arm"
+        );
+    }
+
+    // ---- weight resolution precedence (AC2 / AC3) ----
+
+    /// AC2: an explicit caller weight wins over the adaptive heuristic, per axis.
+    /// Even with `adaptive = true` on an identifier query (which the heuristic
+    /// would make BM25-heavy), the explicit `Some(w)` values pass through verbatim.
+    #[test]
+    fn resolve_weights_explicit_beats_adaptive() {
+        // Identifier query that classify_query_weights would turn BM25-heavy.
+        let (bm25, vector) = resolve_weights(
+            Some(0.3),
+            Some(0.7),
+            /* adaptive */ true,
+            "parse_config",
+        );
+        assert_eq!(
+            (bm25, vector),
+            (0.3, 0.7),
+            "explicit weights must override the adaptive heuristic"
+        );
+    }
+
+    /// AC2 (per-axis): one explicit axis + one unset axis with adaptive on — the
+    /// explicit axis is verbatim, the unset axis comes from the heuristic.
+    #[test]
+    fn resolve_weights_explicit_one_axis_adaptive_other() {
+        // "parse_config" → heuristic ADAPTIVE_BM25_HEAVY = (2.0, 1.0).
+        let (bm25, vector) =
+            resolve_weights(Some(0.5), None, /* adaptive */ true, "parse_config");
+        assert_eq!(bm25, 0.5, "explicit bm25 axis is verbatim");
+        assert_eq!(vector, 1.0, "unset vector axis comes from the heuristic");
+    }
+
+    /// AC3: adaptive OFF + no explicit weights → legacy 1.0/1.0 default, the
+    /// byte-identical behavior the regression guard above pins.
+    #[test]
+    fn resolve_weights_default_off_is_neutral() {
+        let (bm25, vector) = resolve_weights(None, None, /* adaptive */ false, "parse_config");
+        assert_eq!(
+            (bm25, vector),
+            (1.0, 1.0),
+            "adaptive off + no explicit weights must keep the legacy default"
+        );
+    }
+
+    /// Adaptive ON + no explicit weights → the heuristic drives both axes.
+    #[test]
+    fn resolve_weights_adaptive_on_uses_heuristic() {
+        let (bm25, vector) = resolve_weights(None, None, /* adaptive */ true, "parse_config");
+        assert!(
+            bm25 > vector,
+            "adaptive on with an identifier query should be BM25-heavy, got {bm25}/{vector}"
+        );
+    }
+
+    /// A negative explicit weight (which would invert the rank contribution) is
+    /// clamped to 0.0, and a non-finite one is neutralized to 1.0 — the MCP
+    /// boundary cannot smuggle a sort-breaking weight through.
+    #[test]
+    fn resolve_weights_clamps_negative_and_nonfinite() {
+        let (bm25, vector) = resolve_weights(Some(-3.0), Some(f64::NAN), false, "q");
+        assert_eq!(
+            (bm25, vector),
+            (0.0, 1.0),
+            "negative → 0.0 (arm dropped), non-finite → 1.0 (neutral)"
+        );
+        let (b2, v2) = resolve_weights(Some(f64::INFINITY), Some(-0.0), false, "q");
+        assert_eq!(
+            (b2, v2),
+            (1.0, 0.0),
+            "inf → 1.0; -0.0 is non-negative → kept"
         );
     }
 

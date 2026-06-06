@@ -40,9 +40,10 @@ pub use schema::{
 };
 
 pub use search::{
-    apply_structural_boost, bm25_query, dedup_content, dedup_overlapping, hydrate, load_embeddings,
-    mmr_rerank, rrf_fuse, rrf_fuse_weighted, vector_query, vector_query_with, ExportRow,
-    HydratedHit, ImportRow, MMR_LAMBDA, RRF_K, STRUCTURAL_BOOST,
+    apply_structural_boost, bm25_query, classify_query_weights, dedup_content, dedup_overlapping,
+    hydrate, load_embeddings, mmr_rerank, resolve_weights, rrf_fuse, rrf_fuse_weighted,
+    vector_query, vector_query_with, ExportRow, HydratedHit, ImportRow, MMR_LAMBDA, RRF_K,
+    STRUCTURAL_BOOST,
 };
 
 pub use tokens::code_tokens;

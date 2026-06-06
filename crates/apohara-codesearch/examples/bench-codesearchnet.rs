@@ -68,7 +68,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use apohara_indexer::{
     active_embedder, bm25_query, hydrate, index_repo, load_embeddings, migrate, mmr_rerank,
-    open_db, rrf_fuse, vector_query_with, HydratedHit, EMBED_DIM, MMR_LAMBDA,
+    open_db, resolve_weights, rrf_fuse, rrf_fuse_weighted, vector_query_with, HydratedHit,
+    EMBED_DIM, MMR_LAMBDA,
 };
 
 /// Env var pointing at the directory holding the per-language CSN JSONL files
@@ -221,7 +222,7 @@ struct ModeMetrics {
     mrr: f64,
 }
 
-/// The full measurement for one slice: metrics for each of the four arms plus the
+/// The full measurement for one slice: metrics for each of the five arms plus the
 /// count of queries where the hybrid's best relevant rank is strictly worse than
 /// the best single mode's, and the known-miss count (hybrid ranks the target
 /// outside the top-k list).
@@ -231,6 +232,10 @@ struct Measurement {
     vector: ModeMetrics,
     hybrid: ModeMetrics,
     hybrid_mmr: ModeMetrics,
+    /// Story 2 adaptive arm: per-query fusion weights from `resolve_weights`
+    /// (heuristic on, no explicit weights). Carries the AC4 recovery signal —
+    /// compare against `bm25` and `hybrid` on the identifier slice.
+    adaptive: ModeMetrics,
     hybrid_worse_than_best_single: usize,
     total_queries: usize,
     known_miss_queries: usize,
@@ -270,6 +275,7 @@ fn measure(jsonl: &Path, ext: &str) -> Result<Measurement> {
         let mut ve_ranks = Vec::with_capacity(labels.len());
         let mut hy_ranks = Vec::with_capacity(labels.len());
         let mut mmr_ranks = Vec::with_capacity(labels.len());
+        let mut ad_ranks = Vec::with_capacity(labels.len());
 
         // Smallest 1-based rank at which a relevant hit appears in `ids`, or
         // `None`. Relevance is the frozen line-region rule.
@@ -296,15 +302,24 @@ fn measure(jsonl: &Path, ext: &str) -> Result<Measurement> {
             let embeddings = load_embeddings(&conn, &hy_ids_for_mmr).context("load_embeddings")?;
             let mmr = mmr_rerank(&hy, &embeddings, MMR_LAMBDA);
 
+            // adaptive arm (Story 2): resolve per-query weights from the query
+            // shape (no explicit caller weights, heuristic on), then fuse —
+            // exactly the path server.rs takes when adaptive=true. This is the
+            // AC4 recovery signal vs BM25-only and plain hybrid.
+            let (ad_bm25_w, ad_vec_w) = resolve_weights(None, None, true, &label.query);
+            let ad = rrf_fuse_weighted(&bm, &ve, apohara_indexer::RRF_K, ad_bm25_w, ad_vec_w);
+
             let bm_ids: Vec<String> = bm.into_iter().map(|(id, _)| id).collect();
             let ve_ids: Vec<String> = ve.into_iter().map(|h| h.chunk_id).collect();
             let hy_ids: Vec<String> = hy.into_iter().map(|(id, _)| id).collect();
             let mmr_ids: Vec<String> = mmr.into_iter().map(|(id, _)| id).collect();
+            let ad_ids: Vec<String> = ad.into_iter().map(|(id, _)| id).collect();
 
             bm_ranks.push(relevant_rank(&bm_ids, label)?);
             ve_ranks.push(relevant_rank(&ve_ids, label)?);
             hy_ranks.push(relevant_rank(&hy_ids, label)?);
             mmr_ranks.push(relevant_rank(&mmr_ids, label)?);
+            ad_ranks.push(relevant_rank(&ad_ids, label)?);
         }
 
         let hybrid_worse = (0..labels.len())
@@ -324,6 +339,7 @@ fn measure(jsonl: &Path, ext: &str) -> Result<Measurement> {
             vector: aggregate(&ve_ranks),
             hybrid: aggregate(&hy_ranks),
             hybrid_mmr: aggregate(&mmr_ranks),
+            adaptive: aggregate(&ad_ranks),
             hybrid_worse_than_best_single: hybrid_worse,
             total_queries: labels.len(),
             known_miss_queries: known_miss,
@@ -475,6 +491,7 @@ fn print_report(slice_name: &str, m: &Measurement) {
     print_row("vector-only", &m.vector);
     print_row("hybrid (RRF)", &m.hybrid);
     print_row("hybrid+MMR", &m.hybrid_mmr);
+    print_row("adaptive", &m.adaptive);
     println!();
     println!(
         "queries where hybrid < best single mode: {}",

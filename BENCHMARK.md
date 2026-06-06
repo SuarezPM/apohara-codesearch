@@ -400,10 +400,25 @@ anchor; the sha256 you record pins the exact bytes you measured.
 **Harness:** `crates/apohara-codesearch/examples/bench-codesearchnet.rs` — an
 *example* (never packaged by dist), mirroring `bench-external.rs`: env-gated by
 `APOHARA_CSN_ROOT`, twice-run byte-identical determinism assertion, `(file,
-target_line)` relevance. It reports **FOUR** arms — BM25-only, vector-only,
+target_line)` relevance. It reports **FIVE** arms — BM25-only, vector-only,
 hybrid-RRF, and **hybrid+MMR** (the diversity re-rank `mmr_rerank` / `MMR_LAMBDA`
-applied AFTER fusion — additive signal the existing three arms do not measure) —
-plus the "queries where hybrid < best single mode" count, per slice.
+applied AFTER fusion — additive signal the plain three arms do not measure), and
+**adaptive** (Story 2: per-query fusion weights from `classify_query_weights` /
+`resolve_weights` — BM25-heavy on identifier-shaped queries, vector-heavy on
+multi-word NL) — plus the "queries where hybrid < best single mode" count, per
+slice.
+
+> **Adaptive arm — recovery gate (AC4) is MANUAL, pending the CSN corpus.** The
+> adaptive arm exists so the identifier/lexical slice that plain RRF demotes (the
+> documented fusion tax) can be *recovered*: the bar is `adaptive recall@5 >=
+> BM25-only recall@5` AND `adaptive recall@5 >= plain-hybrid recall@5` on that
+> slice — not merely "harmless". This cannot be machine-verified here because the
+> CSN corpus is never vendored; fill the adaptive rows below once the corpus is
+> fetched. **Honesty contract:** if adaptive does NOT clear BM25-only on the
+> identifier slice, record the negative result here — do not ship it silently.
+> With the default feature-hash embedder the vector-heavy branch is near-noise
+> (per the sections above), so a flat or negative adaptive result on NL queries
+> is the *expected* prior, not a regression.
 
 **Dataset fetch (deliberate, standalone).** `scripts/fetch-csn.sh` downloads the
 test-split shards and writes `python.jsonl` / `go.jsonl` / `typescript.jsonl`
@@ -432,14 +447,17 @@ investigate, not a number to massage.
 | | | vector-only | `<r@5>` | `<r@10>` | `<MRR>` |
 | | | hybrid (RRF) | `<r@5>` | `<r@10>` | `<MRR>` |
 | | | hybrid+MMR | `<r@5>` | `<r@10>` | `<MRR>` |
+| | | adaptive | `<r@5>` | `<r@10>` | `<MRR>` |
 | go (N q) | `<≥30%>` | BM25-only | `<r@5>` | `<r@10>` | `<MRR>` |
 | | | vector-only | `<r@5>` | `<r@10>` | `<MRR>` |
 | | | hybrid (RRF) | `<r@5>` | `<r@10>` | `<MRR>` |
 | | | hybrid+MMR | `<r@5>` | `<r@10>` | `<MRR>` |
+| | | adaptive | `<r@5>` | `<r@10>` | `<MRR>` |
 | typescript (N q) | `<≥30%>` | BM25-only | `<r@5>` | `<r@10>` | `<MRR>` |
 | | | vector-only | `<r@5>` | `<r@10>` | `<MRR>` |
 | | | hybrid (RRF) | `<r@5>` | `<r@10>` | `<MRR>` |
 | | | hybrid+MMR | `<r@5>` | `<r@10>` | `<MRR>` |
+| | | adaptive | `<r@5>` | `<r@10>` | `<MRR>` |
 
 **"Hybrid worse than best single mode" count (per slice):** python `<n>`, go
 `<n>`, typescript `<n>` — paste from the harness output. The prior-art expectation
