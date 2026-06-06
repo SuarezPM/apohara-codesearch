@@ -10,6 +10,13 @@
 [![npm](https://img.shields.io/npm/v/@apohara/codesearch-mcp?style=for-the-badge&label=npm&color=purple)](https://www.npmjs.com/package/@apohara/codesearch-mcp)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20server-success?style=for-the-badge)](https://modelcontextprotocol.io)
 
+[![OpenSSF Scorecard](https://img.shields.io/ossf-scorecard/github.com/SuarezPM/apohara-codesearch?style=for-the-badge&label=Scorecard)](https://scorecard.dev/viewer/?uri=github.com/SuarezPM/apohara-codesearch)
+<!-- CII / OpenSSF Best Practices: enroll the project at https://www.bestpractices.dev to
+     obtain <PROJECT_ID>, then replace it below to activate the badge. -->
+[![OpenSSF Best Practices](https://img.shields.io/badge/OpenSSF%20Best%20Practices-pending%20enrollment-lightgrey?style=for-the-badge)](https://www.bestpractices.dev)
+<!-- Once enrolled, swap the placeholder badge above for:
+     [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/<PROJECT_ID>/badge)](https://www.bestpractices.dev/projects/<PROJECT_ID>) -->
+
 **[Quick Start](#-quick-start)** · **[Features](#-features)** · **[Where it fits](#-where-it-fits)** · **[How it works](#-how-it-works--honesty)**
 
 A single Rust binary that runs as a [Model Context Protocol](https://modelcontextprotocol.io) server, giving a coding agent fast, **fully-offline** hybrid search over any local repository — no embedding model to download, no external vector or graph database. It installs in seconds, runs air-gapped in a few megabytes of RAM, and keeps its entire state in **one SQLite file**.
