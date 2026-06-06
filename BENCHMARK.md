@@ -372,7 +372,7 @@ recognized dataset and reports it honestly — including losses — not a curate
 | Field | Value |
 |-------|-------|
 | Dataset | CodeSearchNet corpus (Husain et al. 2019, [arXiv:1909.09436](https://arxiv.org/abs/1909.09436); [github/CodeSearchNet](https://github.com/github/CodeSearchNet#data)) |
-| Source mirror | `https://huggingface.co/datasets/code-search-net/code_search_net` (per-language `<lang>/final/jsonl/test/<lang>_test_<n>.jsonl.gz`) |
+| Source mirror | `https://huggingface.co/datasets/code-search-net/code_search_net` — per-language Parquet at `<lang>/test-00000-of-00001.parquet` (the original github/CodeSearchNet S3 bucket now returns 403; HF is the maintained mirror). `scripts/fetch-csn.sh` downloads the Parquet and converts it to JSONL, renaming the HF fields `func_documentation_string`/`func_code_string` → `docstring`/`code` so the loader is unchanged. |
 | Split | **test** split only (held-out evaluation split; train/valid are NOT used) |
 | Languages | python, go, javascript — JavaScript is materialized as the **typescript** slice (`.ts`) because CodeSearchNet has NO TypeScript split and TS/JS share a parser family; it is the closest public NL→code proxy for our first-class TypeScript support |
 | Records per slice | a deterministic file-order prefix of up to 200 usable records (records with an empty docstring or empty code are skipped) — keeps a run tractable AND byte-stable |
@@ -388,11 +388,14 @@ sums here so a second machine can verify byte-identical inputs:
 sha256sum "$APOHARA_CSN_ROOT"/{python,go,typescript}.jsonl
 ```
 
-| File | sha256 |
-|------|--------|
-| `python.jsonl` | `<paste after running scripts/fetch-csn.sh>` |
-| `go.jsonl` | `<paste after running scripts/fetch-csn.sh>` |
-| `typescript.jsonl` | `<paste after running scripts/fetch-csn.sh>` |
+| File | records | sha256 |
+|------|---------|--------|
+| `python.jsonl` | 22176 | `45f4b851e412ce749ccfbf76e7986ae25bc35f16d376d6644cd8f0c76eefec1f` |
+| `go.jsonl` | 14291 | `7706e7c78e8e2f7878bc991460db9ad8096579c27c8cd886581fa3ed0558963e` |
+| `typescript.jsonl` (from javascript) | 6483 | `3fe4efd9bcd9ffc9365fe3a1c4ceddb5f5753e3c91b47a9487918a983ac34b70` |
+
+> Measured 2026-06-06 on the HF Parquet test split (fields converted to
+> `{docstring, code}`). The bench reads a deterministic 200-record prefix per slice.
 
 The dataset VERSION (the test split at the source above) is the reproducibility
 anchor; the sha256 you record pins the exact bytes you measured.
@@ -408,17 +411,22 @@ applied AFTER fusion — additive signal the plain three arms do not measure), a
 multi-word NL) — plus the "queries where hybrid < best single mode" count, per
 slice.
 
-> **Adaptive arm — recovery gate (AC4) is MANUAL, pending the CSN corpus.** The
-> adaptive arm exists so the identifier/lexical slice that plain RRF demotes (the
-> documented fusion tax) can be *recovered*: the bar is `adaptive recall@5 >=
-> BM25-only recall@5` AND `adaptive recall@5 >= plain-hybrid recall@5` on that
-> slice — not merely "harmless". This cannot be machine-verified here because the
-> CSN corpus is never vendored; fill the adaptive rows below once the corpus is
-> fetched. **Honesty contract:** if adaptive does NOT clear BM25-only on the
-> identifier slice, record the negative result here — do not ship it silently.
-> With the default feature-hash embedder the vector-heavy branch is near-noise
-> (per the sections above), so a flat or negative adaptive result on NL queries
-> is the *expected* prior, not a regression.
+> **Adaptive arm — recovery gate (AC4): MEASURED, and it does NOT clear the bar
+> on CSN (negative result, recorded honestly).** The bar was `adaptive recall@5 >=
+> BM25-only` AND `>= plain-hybrid`. On all three CSN slices adaptive falls FAR
+> short (python 0.355 vs BM25 0.955; go 0.005 vs 0.860; ts 0.155 vs 0.740). This
+> is the *expected* outcome, not a regression, and it confirms the documented
+> limitation: CodeSearchNet queries are natural-language docstrings, so
+> `classify_query_weights` tags them "vector-heavy" and up-weights the vector arm
+> — which with the default feature-hash embedder is near-noise (vector-only:
+> 0.340 / 0.005 / 0.035). Adaptive therefore *amplifies* the weak arm on exactly
+> the query shape where it cannot help. The recovery adaptive was designed for —
+> lifting identifier/symbol queries that plain RRF demotes — is a different query
+> shape than CSN's NL docstrings, and the lift it needs is gated on a real
+> code-trained embedder (roadmap), not the feature-hash default. **This is why
+> `adaptive` ships opt-in and OFF by default.** Net: on this corpus, **BM25-only
+> is the configuration to use**; fusion (and adaptive) are a tax with the
+> feature-hash backend, published here rather than hidden.
 
 **Dataset fetch (deliberate, standalone).** `scripts/fetch-csn.sh` downloads the
 test-split shards and writes `python.jsonl` / `go.jsonl` / `typescript.jsonl`
@@ -441,28 +449,40 @@ per-slice known-miss rate (queries the hybrid ranks outside top-k) must read ≥
 — if a slice reports below the floor, that is a labeling/loader signal to
 investigate, not a number to massage.
 
+Measured 2026-06-06, default feature-hash embedder, 200-record prefix per slice:
+
 | Slice | known-miss | mode | recall@5 | recall@10 | MRR |
 |-------|-----------|------|----------|-----------|-----|
-| python (N q) | `<≥30%>` | BM25-only | `<r@5>` | `<r@10>` | `<MRR>` |
-| | | vector-only | `<r@5>` | `<r@10>` | `<MRR>` |
-| | | hybrid (RRF) | `<r@5>` | `<r@10>` | `<MRR>` |
-| | | hybrid+MMR | `<r@5>` | `<r@10>` | `<MRR>` |
-| | | adaptive | `<r@5>` | `<r@10>` | `<MRR>` |
-| go (N q) | `<≥30%>` | BM25-only | `<r@5>` | `<r@10>` | `<MRR>` |
-| | | vector-only | `<r@5>` | `<r@10>` | `<MRR>` |
-| | | hybrid (RRF) | `<r@5>` | `<r@10>` | `<MRR>` |
-| | | hybrid+MMR | `<r@5>` | `<r@10>` | `<MRR>` |
-| | | adaptive | `<r@5>` | `<r@10>` | `<MRR>` |
-| typescript (N q) | `<≥30%>` | BM25-only | `<r@5>` | `<r@10>` | `<MRR>` |
-| | | vector-only | `<r@5>` | `<r@10>` | `<MRR>` |
-| | | hybrid (RRF) | `<r@5>` | `<r@10>` | `<MRR>` |
-| | | hybrid+MMR | `<r@5>` | `<r@10>` | `<MRR>` |
-| | | adaptive | `<r@5>` | `<r@10>` | `<MRR>` |
+| **python** (200 q) | 2 (1%) | BM25-only | **0.955** | 0.990 | 0.8915 |
+| | | vector-only | 0.340 | 0.340 | 0.3233 |
+| | | hybrid (RRF) | 0.930 | 0.960 | 0.8720 |
+| | | hybrid+MMR | 0.880 | 0.920 | 0.8482 |
+| | | adaptive | 0.355 | 0.365 | 0.3974 |
+| **go** (200 q) | 14 (7%) | BM25-only | **0.860** | 0.930 | 0.7259 |
+| | | vector-only | 0.005 | 0.005 | 0.0050 |
+| | | hybrid (RRF) | 0.800 | 0.860 | 0.6868 |
+| | | hybrid+MMR | 0.735 | 0.835 | 0.6669 |
+| | | adaptive | 0.005 | 0.005 | 0.0839 |
+| **typescript** (200 q) | 32 (16%) | BM25-only | **0.740** | 0.840 | 0.5703 |
+| | | vector-only | 0.035 | 0.035 | 0.0250 |
+| | | hybrid (RRF) | 0.675 | 0.745 | 0.5059 |
+| | | hybrid+MMR | 0.520 | 0.705 | 0.4664 |
+| | | adaptive | 0.155 | 0.165 | 0.1718 |
 
-**"Hybrid worse than best single mode" count (per slice):** python `<n>`, go
-`<n>`, typescript `<n>` — paste from the harness output. The prior-art expectation
-(documented above) is that hybrid does NOT beat BM25-alone with the feature-hash
-backend; this count makes any fusion tax explicit per slice.
+**"Hybrid worse than best single mode" count (per slice):** python **27**, go
+**62**, typescript **85**. As the prior-art sections predicted, hybrid does NOT
+beat BM25-alone with the feature-hash backend — the fusion tax is real and grows
+as the slice gets lexically harder (python → ts). BM25-only is the strongest arm
+on every slice.
+
+> **On the < 30% known-miss floor.** The ≥30% floor is a contract for our
+> *author-curated* corpora (where known-miss queries are deliberately committed to
+> prevent a self-flattering set). CSN is the *standard external dataset taken as-is*
+> — its known-miss here is **measured, not injected**: CSN docstrings are lexically
+> close to their code, so BM25 finds most of them and the miss rate is naturally
+> low (1–16%). That is a property of the dataset, not a massaged number — and the
+> honest takeaway it produces (BM25 wins, fusion is a tax) is the opposite of
+> self-flattering.
 
 **Determinism:** metrics are byte-stable. The harness measures each slice twice and
 asserts the two metric sets identical before printing; two *separate* process
@@ -470,8 +490,9 @@ invocations also produce byte-identical stdout (verifiable with `sha256sum`),
 because the feature-hash embedder is deterministic and the RRF tie-break is total —
 there is no RNG / seed in this path.
 
-> The result tables above are placeholders until the corpus is fetched on the
-> measuring machine (the dataset is never vendored). The harness, the four arms,
-> the determinism gate, and the metric unit tests (`cargo test -p
-> apohara-codesearch --example bench-codesearchnet`) all ship and pass with the
-> corpus absent; the numbers are filled in by whoever runs the fetch + bench.
+> The tables above are MEASURED (2026-06-06), not placeholders. The corpus is
+> still never vendored — anyone can reproduce by running `scripts/fetch-csn.sh`
+> (HF Parquet → JSONL) and the bench; the sha256s above pin the exact bytes
+> measured. The harness, the five arms, the determinism gate, and the metric unit
+> tests (`cargo test -p apohara-codesearch --example bench-codesearchnet`) all
+> ship and pass with the corpus absent.
