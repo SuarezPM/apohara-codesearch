@@ -43,3 +43,9 @@ jobs:
 
       - name: dist plan
         run: dist plan
+
+      # Drift guard: fail if the committed release.yml diverges from what the
+      # [workspace.metadata.dist] config implies. Catches "config says attest
+      # but the committed workflow doesn't" — the regeneration must be in sync.
+      - name: dist generate --check
+        run: dist generate --check

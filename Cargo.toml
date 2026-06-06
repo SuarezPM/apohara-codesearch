@@ -48,6 +48,14 @@ ci = "github"
 installers = []
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# SLSA Build L3 provenance: dist wires GitHub's actions/attest@v4 into the
+# generated workflow and elevates the job permissions (id-token: write,
+# attestations: write). No hand-editing of release.yml — dist owns it.
+github-attestations = true
+# Phase "build-local-artifacts" (dist's default) is the strongest SLSA chain:
+# each platform attests its OWN binary at build time, before upload — rather
+# than attesting the assembled set afterwards. No filters: attest all artifacts.
+github-attestations-phase = "build-local-artifacts"
 
 # Cross-compile the Windows MSVC target via cargo-xwin inside the maintained
 # messense/cargo-xwin container (cc-built bundled SQLite links the MSVC CRT
