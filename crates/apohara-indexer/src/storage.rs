@@ -252,7 +252,7 @@ pub fn insert_chunk_full_with(
     // already bounded by the chunker, so this is a no-op for them.
     let indexed = truncate_on_char_boundary(&chunk.body, MAX_CHUNK_BYTES);
 
-    let embed = embedder.embed(indexed);
+    let embed = embedder.embed_document(indexed);
     let bytes: Vec<u8> = embed.iter().flat_map(|f| f.to_le_bytes()).collect();
     conn.execute(
         "INSERT INTO chunks_vec (rowid, embedding) \
@@ -357,7 +357,7 @@ pub fn knn_query_with(
     k: usize,
     embedder: &dyn Embedder,
 ) -> Result<Vec<KnnHit>> {
-    let embed = embedder.embed(query);
+    let embed = embedder.embed_query(query);
     let bytes: Vec<u8> = embed.iter().flat_map(|f| f.to_le_bytes()).collect();
     let mut stmt = conn
         .prepare(

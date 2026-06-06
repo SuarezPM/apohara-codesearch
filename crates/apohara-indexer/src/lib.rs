@@ -14,6 +14,9 @@
 
 pub mod chunker;
 pub mod embedder;
+/// Real EmbeddingGemma forward-pass backend; compiled ONLY behind `gguf-embed`.
+#[cfg(feature = "gguf-embed")]
+pub mod embedder_gemma;
 pub mod embeddings;
 pub mod incremental;
 pub mod parser;
@@ -34,6 +37,9 @@ pub use embedder::{
     active_embedder, resolve_embedder_choice, Embedder, EmbedderChoice, FeatureHashEmbedder,
     EMBED_MODEL_ENV, FEATURE_HASH_ID,
 };
+
+#[cfg(feature = "gguf-embed")]
+pub use embedder_gemma::{EmbeddingGemmaEmbedder, EMBEDDINGGEMMA_ID};
 
 pub use registry::{
     load as load_registry, register, registry_path, save as save_registry, Registry,

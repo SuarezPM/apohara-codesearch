@@ -50,6 +50,19 @@ pub trait Embedder: Send + Sync {
     fn id(&self) -> &str;
     /// Output dimension. MUST match the `chunks_vec` DDL width for the index.
     fn dim(&self) -> usize;
+
+    /// Embed a SEARCH QUERY. Backends with asymmetric prompts (e.g.
+    /// EmbeddingGemma) override this to prepend a query instruction; the default
+    /// is symmetric and delegates to [`Embedder::embed`], so feature-hash and any
+    /// other symmetric backend need no change.
+    fn embed_query(&self, text: &str) -> Vec<f32> {
+        self.embed(text)
+    }
+    /// Embed a DOCUMENT/chunk for indexing. Asymmetric backends override this to
+    /// prepend a document prefix; the default delegates to [`Embedder::embed`].
+    fn embed_document(&self, text: &str) -> Vec<f32> {
+        self.embed(text)
+    }
 }
 
 /// Stable id for the default feature-hash backend, recorded in `meta.embedder_id`.
@@ -168,8 +181,41 @@ pub fn active_embedder(dim: usize) -> Box<dyn Embedder> {
 }
 
 /// Load the gguf/local-model embedder, falling back to feature-hash on any error.
+///
+/// Routes by checkpoint type: an EmbeddingGemma directory (`config.json` with
+/// `model_type == "gemma3_text"`) loads the REAL pure-candle Gemma3 forward-pass
+/// [`crate::embedder_gemma::EmbeddingGemmaEmbedder`] (256d Matryoshka, asymmetric
+/// prompts); anything else falls through to the BERT [`GgufEmbedder`]. The
+/// EmbeddingGemma backend reports its OWN `dim()` (256), so the incoming `dim`
+/// hint (the feature-hash default width) is irrelevant to it — the caller reads
+/// the resolved embedder's `dim()` for the DDL width.
 #[cfg(feature = "gguf-embed")]
 fn load_gguf_or_fallback(model_path: &str, dim: usize) -> Box<dyn Embedder> {
+    use crate::embedder_gemma::EmbeddingGemmaEmbedder;
+
+    // Resolve the checkpoint directory to inspect config.json for the model type.
+    let raw = std::path::Path::new(model_path);
+    let dir = if raw.is_dir() {
+        Some(raw.to_path_buf())
+    } else {
+        raw.parent().map(|p| p.to_path_buf())
+    };
+
+    if let Some(dir) = dir.as_deref() {
+        if EmbeddingGemmaEmbedder::is_gemma_checkpoint(dir) {
+            match EmbeddingGemmaEmbedder::load(model_path) {
+                Ok(e) => return Box::new(e),
+                Err(err) => {
+                    eprintln!(
+                        "apohara-codesearch: failed to load EmbeddingGemma model '{model_path}': \
+                         {err}; falling back to the built-in feature-hash embedder (no network fetch)"
+                    );
+                    return Box::new(FeatureHashEmbedder::new(dim));
+                }
+            }
+        }
+    }
+
     match GgufEmbedder::load(model_path, dim) {
         Ok(e) => Box::new(e),
         Err(err) => {
