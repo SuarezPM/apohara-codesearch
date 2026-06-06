@@ -13,15 +13,17 @@ path = "src/lib.rs"
 
 [features]
 # OFF by default (the default build ships no model). When enabled, compiles the
-# feature-gated `GgufEmbedder` in `embedder.rs`, which loads a USER-SUPPLIED
-# local model file from disk (std::fs only — NO network, NO hf-hub). The actual
-# transformer forward-pass is an integration point (see the GgufEmbedder doc):
-# completing it pulls candle-core/candle-transformers/tokenizers as OPTIONAL,
-# feature-gated deps so the DEFAULT build keeps zero ML/model crates and the
-# model-weight scan stays 0. Web research (2026-06): candle + safetensors both
-# load directly from a local path; the real offline embedding path is a local
-# safetensors BERT checkpoint (pure-Rust GGUF *embedding* inference is largely
-# unimplemented upstream — this is why the name is the only "gguf" part for now).
+# feature-gated real embedders in `embedder.rs` / `embedder_gemma.rs`, which load
+# a USER-SUPPLIED local model directory from disk (std::fs/mmap only — NO network,
+# NO hf-hub). Primary backend (v0.8): `EmbeddingGemmaEmbedder` — a from-scratch
+# pure-candle forward pass of EmbeddingGemma-300m (Gemma3 encoder + dense head),
+# validated to cosine 0.99998 vs the official ONNX reference; 256d Matryoshka,
+# asymmetric query/document prompts. (The legacy `GgufEmbedder` candle-BERT path
+# is also gated here.) Pulls candle-core/candle-nn/candle-transformers/tokenizers
+# as OPTIONAL, feature-gated deps so the DEFAULT build keeps zero ML/model crates
+# (`cargo tree -e normal` asserts it) and the feature-hash default stays
+# byte-identical. The name is historical ("gguf"); the shipped path loads
+# safetensors, not GGUF.
 gguf-embed = [
     "dep:candle-core",
     "dep:candle-nn",

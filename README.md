@@ -153,7 +153,7 @@ Measured with the default feature-hash embedder on a Ryzen 5 3600 / 48 GB box, d
 Peak resident memory is **flat across repo size** — no OOM, no external process. One SQLite file is the only state.
 
 > [!WARNING]
-> **The vector is a robustness layer, not a semantic engine.** Because the embedding is a feature-hash, a conceptual query that shares no tokens with the target will not surface it — and on a clean corpus where lexical search already wins, fusion can be a slight net negative. [BENCHMARK.md](BENCHMARK.md) **publishes this** (synthetic corpus + a one-off external comparison on real OSS, with ≥30% committed known-miss queries) rather than hiding it. Deep structural context (callers/callees, call graphs) is out of scope by design. A real local embedding model is an **opt-in, user-supplied** build feature — never downloaded — so the default install stays zero-dependency.
+> **The vector is a robustness layer, not a semantic engine.** Because the embedding is a feature-hash, a conceptual query that shares no tokens with the target will not surface it — and on a clean corpus where lexical search already wins, fusion can be a slight net negative. [BENCHMARK.md](BENCHMARK.md) **publishes this** (synthetic corpus + a one-off external comparison on real OSS, with ≥30% committed known-miss queries) rather than hiding it. Deep structural context (callers/callees, call graphs) is out of scope by design. A real local embedding model is an **opt-in, user-supplied** build feature — never downloaded — so the default install stays zero-dependency. **That lever now exists and is measured:** the `gguf-embed` feature runs **EmbeddingGemma-300m in pure candle** (no native deps) on user-supplied weights, and on CodeSearchNet it flips this picture entirely — the vector arm beats BM25-only and fusion stops being a tax (see [BENCHMARK.md](BENCHMARK.md), v0.8 section). The default build is unchanged: still the deterministic feature-hash, still zero-model.
 
 See **[BENCHMARK.md](BENCHMARK.md)** for the method, the reproduce command, and per-mode `recall@k` / `MRR` — across BM25-only, vector-only, hybrid, and hybrid+MMR — on a synthetic corpus, real OSS, and the standard [CodeSearchNet](https://github.com/github/CodeSearchNet) `{NL query → code}` slices (Python/Go/TypeScript, env-pointed, never vendored).
 
@@ -204,7 +204,7 @@ apohara-codesearch/
 - [x] **SLSA Build L3** signed provenance on every release artifact (cargo-dist native attestation)
 - [x] Multi-repo schema — composite `PRIMARY KEY(repo_id, path)` + sidecar JSON registry, versioned backward-compatible migration
 - [x] `SECURITY.md` threat model + OpenSSF Scorecard workflow
-- [ ] Code-trained embedding model (e.g. EmbeddingGemma) for real semantic lift — the feature-hash default has none by design
+- [x] **Code-trained embedding model — EmbeddingGemma-300m in pure candle** (opt-in `gguf-embed`, user-supplied weights, no native deps, parity 0.99998 vs the official ONNX reference). Measured on CodeSearchNet: the vector arm goes from feature-hash noise (recall@5 0.34/0.005/0.035) to **0.95/0.99/0.885**, hybrid now **beats BM25-only on all 3 slices**, and the adaptive recovery gate (AC4) **closes** — see [BENCHMARK.md](BENCHMARK.md). Default build stays zero-model/offline.
 - [ ] OpenSSF Best Practices enrollment (badge pending)
 
 ---
