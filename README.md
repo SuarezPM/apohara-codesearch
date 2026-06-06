@@ -60,12 +60,14 @@ search_code(path=".", query="where does the runtime block on a future?")
 |---|---|
 | 🔌 **MCP stdio server** | Two tools — `search_code` (hybrid) and `reindex` (incremental) — over plain JSON-RPC. Works with Claude Code or any MCP client. |
 | 🦀 **One static binary** | No Node, no native bindings, no toolchain, no service. `cargo install` or `npx`, then run. The only state is one SQLite file. |
-| 🧠 **Hybrid ranking** | BM25 (SQLite FTS5) + a feature-hash vector (sqlite-vec), merged with Reciprocal Rank Fusion, then MMR-diversified. |
+| 🧠 **Hybrid ranking** | BM25 (SQLite FTS5) + a feature-hash vector (sqlite-vec), merged with Reciprocal Rank Fusion, then MMR-diversified. Optional **adaptive weighting** biases the fusion by query shape (opt-in, off by default). |
 | 🌳 **Structural extraction** | Per-symbol chunks with signatures + file imports/exports for **Rust, TS, Python, Go**; everything else indexed as text. |
 | 📴 **Offline & air-gapped** | Zero network at runtime AND at build. No model fetch, no telemetry, no API keys. |
 | 🪶 **Near-zero footprint** | ~22 MB resident memory indexing a 224k-LOC repo — flat with repo size (memory-bounded pipeline). |
+| 🗂️ **Multi-repo aware** | Each repo keeps its own SQLite index (`PRIMARY KEY(repo_id, path)`); a sidecar JSON registry tracks the path→index map, with versioned, backward-compatible migrations. |
 | ⚡ **Incremental + watch** | `reindex` does blake3 content-hash deltas; the `watch` subcommand keeps the index current as files change (a plain CLI loop, **not** a plugin hook). |
 | 🔁 **Deterministic** | Same input ⇒ same vector ⇒ byte-stable `recall@k`/`MRR`. Re-indexing is stable. |
+| 🔏 **Signed releases** | Every release artifact carries a [SLSA Build L3](https://slsa.dev) provenance attestation; see [SECURITY.md](SECURITY.md) for the threat model. |
 
 ---
 
@@ -112,7 +114,7 @@ This proves the binary was built by this repo's release workflow on GitHub-hoste
 
 | Tool | What it does |
 |---|---|
-| `search_code` | Hybrid BM25 + vector search over a repo path. Lazily indexes on first call. Returns the top-k hits with structural context. |
+| `search_code` | Hybrid BM25 + vector search over a repo path. Lazily indexes on first call. Returns the top-k hits with structural context. Optional knobs: `bm25_weight`/`vector_weight` (explicit fusion weights), `adaptive` (query-shape weighting, off by default), `diversify` (MMR), `boost_imports`. |
 | `reindex` | Re-index a repo. Incremental by default (blake3 content-hash deltas); `force: true` rebuilds from scratch. |
 
 ---
@@ -153,7 +155,7 @@ Peak resident memory is **flat across repo size** — no OOM, no external proces
 > [!WARNING]
 > **The vector is a robustness layer, not a semantic engine.** Because the embedding is a feature-hash, a conceptual query that shares no tokens with the target will not surface it — and on a clean corpus where lexical search already wins, fusion can be a slight net negative. [BENCHMARK.md](BENCHMARK.md) **publishes this** (synthetic corpus + a one-off external comparison on real OSS, with ≥30% committed known-miss queries) rather than hiding it. Deep structural context (callers/callees, call graphs) is out of scope by design. A real local embedding model is an **opt-in, user-supplied** build feature — never downloaded — so the default install stays zero-dependency.
 
-See **[BENCHMARK.md](BENCHMARK.md)** for the method, the reproduce command, and per-mode `recall@k` / `MRR` across BM25-only, vector-only, and hybrid.
+See **[BENCHMARK.md](BENCHMARK.md)** for the method, the reproduce command, and per-mode `recall@k` / `MRR` — across BM25-only, vector-only, hybrid, and hybrid+MMR — on a synthetic corpus, real OSS, and the standard [CodeSearchNet](https://github.com/github/CodeSearchNet) `{NL query → code}` slices (Python/Go/TypeScript, env-pointed, never vendored).
 
 ---
 
@@ -172,11 +174,12 @@ apohara-codesearch/
 │   │       ├── embedder.rs      # pluggable Embedder trait (opt-in gguf-embed)
 │   │       ├── storage.rs       # SQLite: chunks + FTS5 + sqlite-vec
 │   │       ├── schema.rs        # migrations + embedder refuse-to-mix meta
-│   │       ├── search.rs        # BM25 + vector + RRF + MMR + structural boost
-│   │       └── incremental.rs   # blake3-delta reindex in one transaction
+│   │       ├── search.rs        # BM25 + vector + RRF + MMR + adaptive weights + boost
+│   │       ├── incremental.rs   # blake3-delta reindex in one transaction
+│   │       └── registry.rs      # multi-repo path→index sidecar JSON registry
 │   └── apohara-codesearch/     # the MCP server + CLI
 │       ├── src/{main,server,watch,dto}.rs
-│       └── examples/           # bench-search (in-CI) · bench-external (one-off)
+│       └── examples/           # bench-search (in-CI) · bench-external · bench-codesearchnet (one-off)
 ├── npm/                         # @apohara/codesearch-mcp wrapper (downloads the Release binary)
 ├── .claude-plugin/ + marketplace.json   # Claude Code plugin manifest
 └── .github/workflows/          # ci.yml (test/clippy/fmt/dist) · release.yml (cargo-dist)
@@ -193,9 +196,16 @@ apohara-codesearch/
 - [x] Honest benchmark — synthetic (in-CI) + external real-OSS, with committed known-miss
 - [x] Large-OSS soak (Rust + Go ≥100k LOC) — flat ~22 MB peak RSS
 - [x] Pluggable `Embedder` trait (opt-in, default stays zero-model)
-- [ ] Real local embedder backend (candle / safetensors, opt-in, user-supplied)
-- [ ] Skip generated/minified assets in the walker (DB-bloat hardening)
-- [ ] Per-language chunk-cap validation (TypeScript / Python)
+- [x] Real local embedder backend (candle / safetensors, opt-in, user-supplied)
+- [x] Skip generated/minified assets in the walker (DB-bloat hardening)
+- [x] Per-language chunk-cap validation (TypeScript / Python)
+- [x] **CodeSearchNet** `recall@5`/`MRR` benchmark — 4 arms (BM25 / vector / hybrid / hybrid+MMR), env-pointed, never vendored
+- [x] Adaptive query-shape fusion weighting (opt-in, default off)
+- [x] **SLSA Build L3** signed provenance on every release artifact (cargo-dist native attestation)
+- [x] Multi-repo schema — composite `PRIMARY KEY(repo_id, path)` + sidecar JSON registry, versioned backward-compatible migration
+- [x] `SECURITY.md` threat model + OpenSSF Scorecard workflow
+- [ ] Code-trained embedding model (e.g. EmbeddingGemma) for real semantic lift — the feature-hash default has none by design
+- [ ] OpenSSF Best Practices enrollment (badge pending)
 
 ---
 
