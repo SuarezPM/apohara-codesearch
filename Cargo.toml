@@ -57,6 +57,12 @@ github-attestations = true
 # each platform attests its OWN binary at build time, before upload — rather
 # than attesting the assembled set afterwards. No filters: attest all artifacts.
 github-attestations-phase = "build-local-artifacts"
+# release.yml is hand-edited after generation: GitHub Actions are pinned to commit
+# SHAs and token permissions are split to least-privilege per-job (OpenSSF
+# Scorecard Pinned-Dependencies + Token-Permissions). `allow-dirty = ["ci"]` tells
+# dist not to flag the workflow as out-of-date in `dist plan` / `dist generate`.
+# After any `dist generate`, re-apply the SHA pins + per-job permissions.
+allow-dirty = ["ci"]
 
 # Cross-compile the Windows MSVC target via cargo-xwin inside the maintained
 # messense/cargo-xwin container (cc-built bundled SQLite links the MSVC CRT
