@@ -11,6 +11,8 @@ members = [
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Pablo M. Suarez <suarezpm@csnat.unt.edu.ar>"]
+repository = "https://github.com/SuarezPM/apohara-codesearch"
+homepage = "https://github.com/SuarezPM/apohara-codesearch#readme"
 
 # Single source of version truth for deps shared across workspace crates.
 # Versions are pinned to match the upstream apohara-indexer soft-fork source.

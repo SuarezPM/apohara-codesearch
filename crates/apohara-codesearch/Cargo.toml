@@ -6,9 +6,14 @@ version = "0.2.0-rc.1"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+homepage.workspace = true
 # Required by dist (cargo-dist) for the GitHub CI backend: it derives the
 # Release upload target from this URL.
 repository = "https://github.com/SuarezPM/apohara-codesearch"
+description = "Offline hybrid code-search MCP server — one Rust binary, no model, no database. BM25 + vector retrieval over local repositories via the Model Context Protocol."
+readme = "../../README.md"
+keywords = ["mcp", "code-search", "bm25", "vector-search", "sqlite"]
+categories = ["development-tools", "command-line-utilities"]
 
 [[bin]]
 name = "apohara-codesearch"
@@ -31,7 +36,10 @@ gguf-embed = ["apohara-indexer/gguf-embed"]
 # Reused indexing/search engine (lib-only soft-fork). Provides open_db, migrate,
 # index_repo, reindex, bm25_query, vector_query, rrf_fuse, hydrate, RRF_K, and
 # the sqlite_version() helper used by the --sqlite-version gate.
-apohara-indexer = { path = "../apohara-indexer" }
+# `version` (alongside `path`) is REQUIRED for `cargo publish`: the published bin
+# resolves apohara-indexer from crates.io. Publish order: indexer FIRST, then bin.
+# Keep this in lockstep with apohara-indexer's package version on every bump.
+apohara-indexer = { path = "../apohara-indexer", version = "0.2.0-rc.1" }
 
 # rmcp 1.x official Rust MCP SDK. Features:
 #   server        — ServerHandler, ToolRouter, tool macros

@@ -6,6 +6,11 @@ version = "0.2.0-rc.1"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Offline hybrid (BM25 + vector) code-search indexing engine — SQLite FTS5 + sqlite-vec + tree-sitter + a blake3 feature-hash embedder. The library core behind apohara-codesearch."
+keywords = ["code-search", "bm25", "tree-sitter", "sqlite", "embeddings"]
+categories = ["development-tools", "text-processing"]
 
 [lib]
 name = "apohara_indexer"
