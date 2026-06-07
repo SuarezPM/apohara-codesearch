@@ -7,6 +7,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/SuarezPM/apohara-codesearch/ci.yml?style=for-the-badge&label=CI)](https://github.com/SuarezPM/apohara-codesearch/actions)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=for-the-badge)](#-license)
 [![Rust](https://img.shields.io/badge/rust-stable-orange?style=for-the-badge&logo=rust)](https://www.rust-lang.org)
+[![crates.io](https://img.shields.io/crates/v/apohara-codesearch?style=for-the-badge&logo=rust&label=crates.io)](https://crates.io/crates/apohara-codesearch)
 [![npm](https://img.shields.io/npm/v/@apohara/codesearch-mcp?style=for-the-badge&label=npm&color=purple)](https://www.npmjs.com/package/@apohara/codesearch-mcp)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20server-success?style=for-the-badge)](https://modelcontextprotocol.io)
 
@@ -81,7 +82,10 @@ The `npx` wrapper downloads the matching prebuilt binary for your platform on fi
 <summary><b>Other acquisition paths</b> — build from source, run directly, keep the index live</summary>
 
 ```bash
-# Build + install from a checkout (lowest-trust path):
+# Install from crates.io:
+cargo install apohara-codesearch
+
+# Or build + install from a checkout (lowest-trust path):
 cargo install --path crates/apohara-codesearch
 
 # Run the binary directly as a stdio MCP server:
@@ -201,13 +205,22 @@ apohara-codesearch/
 - [x] Multi-repo schema — composite `PRIMARY KEY(repo_id, path)` + sidecar JSON registry, versioned backward-compatible migration
 - [x] `SECURITY.md` threat model + OpenSSF Scorecard workflow
 - [x] **Code-trained embedding model — EmbeddingGemma-300m in pure candle** (opt-in `gguf-embed`, user-supplied weights, no native deps, parity 0.99998 vs the official ONNX reference). Measured on CodeSearchNet: the vector arm goes from feature-hash noise (recall@5 0.34/0.005/0.035) to **0.95/0.99/0.885**, hybrid now **beats BM25-only on all 3 slices**, and the adaptive recovery gate (AC4) **closes** — see [BENCHMARK.md](BENCHMARK.md). Default build stays zero-model/offline.
-- [x] **OpenSSF Best Practices** — enrolled ([#13118](https://www.bestpractices.dev/projects/13118)); Passing + Silver criteria mapped to evidence in [`docs/best-practices-silver.md`](docs/best-practices-silver.md), with governance (`CONTRIBUTING`/`CODE_OF_CONDUCT`/`GOVERNANCE`/`CHANGELOG`), an [assurance case](docs/ASSURANCE.md), and supply-chain CI (`cargo-deny` + `cargo-audit` + Dependabot + offline-isolation guard)
+- [x] **OpenSSF Best Practices — Silver** ([#13118](https://www.bestpractices.dev/projects/13118)); every Passing + Silver criterion mapped to evidence in [`docs/best-practices-silver.md`](docs/best-practices-silver.md), with governance (`CONTRIBUTING`/`CODE_OF_CONDUCT`/`GOVERNANCE`/`CHANGELOG`) + an [assurance case](docs/ASSURANCE.md)
+- [x] **Supply-chain / OpenSSF Scorecard hardening** — CodeQL SAST (Rust + Actions) · `cargo-fuzz` targets run via ClusterFuzzLite on PRs · `cargo-deny` + `cargo-audit` + Dependabot · all Actions pinned to commit SHAs · least-privilege workflow tokens · branch protection on `main` · signed crates.io + npm publishing
 
 ---
 
 ## 🔐 Security
 
-Found a vulnerability? Please report it **privately** via [GitHub Security Advisories](https://github.com/SuarezPM/apohara-codesearch/security/advisories/new) — see [`SECURITY.md`](SECURITY.md) for the disclosure process, supported versions, and the **threat model** (what the tool defends and what is deliberately out of scope). The full **assurance case** (security requirements, trust boundaries, the secure-design argument, and how common weaknesses are countered) is in [`docs/ASSURANCE.md`](docs/ASSURANCE.md). Supply-chain health is tracked by an [OpenSSF Scorecard](https://scorecard.dev/viewer/?uri=github.com/SuarezPM/apohara-codesearch) workflow and the [OpenSSF Best Practices](https://www.bestpractices.dev/projects/13118) badge; the per-criterion evidence map is in [`docs/best-practices-silver.md`](docs/best-practices-silver.md).
+Found a vulnerability? Please report it **privately** via [GitHub Security Advisories](https://github.com/SuarezPM/apohara-codesearch/security/advisories/new) — see [`SECURITY.md`](SECURITY.md) for the disclosure process, supported versions, and the **threat model** (what the tool defends and what is deliberately out of scope). The full **assurance case** (security requirements, trust boundaries, the secure-design argument, and how common weaknesses are countered) is in [`docs/ASSURANCE.md`](docs/ASSURANCE.md).
+
+The project holds the **[OpenSSF Best Practices Silver](https://www.bestpractices.dev/projects/13118)** badge (per-criterion evidence in [`docs/best-practices-silver.md`](docs/best-practices-silver.md)) and is continuously hardened to the **[OpenSSF Scorecard](https://scorecard.dev/viewer/?uri=github.com/SuarezPM/apohara-codesearch)**:
+
+- **CodeQL** static analysis (Rust + GitHub Actions) on every push/PR;
+- **`cargo-fuzz`** targets over the untrusted-input parser/chunker, run via **ClusterFuzzLite** on PRs;
+- **`cargo-deny`** (licenses/advisories/sources) + **`cargo-audit`** (RUSTSEC) dependency gates + **Dependabot**;
+- all GitHub Actions **pinned to commit SHAs**, **least-privilege** workflow tokens, and **branch protection** on `main`;
+- **SLSA Build L3** provenance on every release artifact (verify with `gh attestation verify`), with signed crates.io + npm publishing.
 
 ---
 
