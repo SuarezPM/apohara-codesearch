@@ -1,0 +1,39 @@
+# cargo-fuzz / libFuzzer harness. This is a SEPARATE crate (note the empty
+# `[workspace]` table below), so the main workspace build (`cargo build
+# --workspace`) never compiles it — fuzzers need a nightly + sanitizer toolchain.
+# Built and run by ClusterFuzzLite in CI (.clusterfuzzlite/) and locally with
+# `cargo +nightly fuzz run <target>`.
+[package]
+name = "apohara-codesearch-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.apohara-indexer]
+path = "../crates/apohara-indexer"
+
+# Untrusted-input parsing surface: a crafted source file must never panic the
+# parser or the chunker (see SECURITY.md + docs/ASSURANCE.md § 4).
+[[bin]]
+name = "parse_source"
+path = "fuzz_targets/parse_source.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chunk_file"
+path = "fuzz_targets/chunk_file.rs"
+test = false
+doc = false
+bench = false
+
+# Empty workspace table: decouples this crate from the parent workspace so the
+# parent's `cargo build`/clippy/test never tries to build the fuzzers.
+[workspace]
