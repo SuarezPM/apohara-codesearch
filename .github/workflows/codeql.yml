@@ -1,0 +1,49 @@
+# CodeQL static analysis (SAST). Scans Rust source and the GitHub Actions
+# workflows for security issues, publishing alerts to the Security tab. Rust
+# analysis is generally available and uses build-mode `none` (rust-analyzer, no
+# full compile). A SEPARATE lane from ci.yml (lint/test) and scorecard.yml.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, Monday 07:30 UTC (offset from the Scorecard run).
+    - cron: '30 7 * * 1'
+
+# Least privilege at the top level; the analysis job widens only what it needs.
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to upload code-scanning results to the Security tab.
+      security-events: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: rust
+            build-mode: none
+          - language: actions
+            build-mode: none
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        with:
+          category: "/language:${{ matrix.language }}"

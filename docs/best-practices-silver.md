@@ -124,7 +124,7 @@ remaining step. Highlights (the full Silver table below subsumes the rest):
 ### Analysis
 | Criterion | Status | Evidence |
 |---|---|---|
-| `static_analysis_common_vulnerabilities` | Met | `clippy` + `cargo-audit` (RUSTSEC) + `cargo-deny` in CI, plus OpenSSF Scorecard. |
+| `static_analysis_common_vulnerabilities` | Met | `clippy` + `cargo-audit` (RUSTSEC) + `cargo-deny` + a **CodeQL** workflow (Rust + Actions SAST, `.github/workflows/codeql.yml`) in CI, plus OpenSSF Scorecard. |
 | `dynamic_analysis` (SUGGESTED) | Justified unmet | No continuous fuzzing yet; parsing is error-tolerant and bounded, and pathological-input reports are explicitly welcomed in `SECURITY.md`. A fuzz target is a possible future addition. |
 | `dynamic_analysis_unsafe` (SHOULD) | N/A | The produced software is memory-safe Rust; the only `unsafe` is a narrow FFI registration + an opt-in `mmap` (not pointer arithmetic on attacker data), so the memory-safety dynamic-analysis requirement does not apply. |
 

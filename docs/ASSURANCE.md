@@ -122,7 +122,9 @@ trusted inputs. See
   (`RUSTSEC-2024-0436`, `paste` unmaintained, opt-in tree only) is justified in
   [`deny.toml`](../deny.toml). Dependabot opens update PRs weekly.
 - **Static analysis.** `clippy` with `-D warnings` (no warning tolerated) on every
-  change, plus an OpenSSF Scorecard workflow feeding the supply-chain badge.
+  change, a **CodeQL** workflow (Rust + GitHub Actions SAST), and an OpenSSF
+  Scorecard workflow feeding the supply-chain badge. All workflow Actions are
+  pinned to commit SHAs and run with least-privilege token permissions.
 - **Index integrity.** Reindex is a single transaction; schema migrations are
   idempotent and gate a data-losing downgrade loudly ([`schema.rs`](../crates/apohara-indexer/src/schema.rs)).
 

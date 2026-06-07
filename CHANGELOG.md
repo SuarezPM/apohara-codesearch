@@ -24,8 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Contributor Covenant 3.0), [`GOVERNANCE.md`](GOVERNANCE.md), this changelog,
   [`docs/ASSURANCE.md`](docs/ASSURANCE.md) (assurance case), and
   [`docs/best-practices-silver.md`](docs/best-practices-silver.md) (criteria
-  evidence map). Supply-chain CI hardening: `cargo-deny` + `cargo-audit` jobs and
-  a Dependabot config.
+  evidence map).
+- **Supply-chain / OpenSSF Scorecard hardening**: `cargo-deny` + `cargo-audit`
+  jobs, a Dependabot config (Dependency-Update-Tool), a **CodeQL** workflow for
+  Rust + Actions (SAST), all GitHub Actions **pinned to commit SHAs**
+  (Pinned-Dependencies), and least-privilege **top-level `contents: read`** token
+  permissions across every workflow (Token-Permissions), with write elevated
+  per-job only where the release is created/published.
 
 ### Changed
 
