@@ -11,11 +11,7 @@
 [![MCP](https://img.shields.io/badge/MCP-stdio%20server-success?style=for-the-badge)](https://modelcontextprotocol.io)
 
 [![OpenSSF Scorecard](https://img.shields.io/ossf-scorecard/github.com/SuarezPM/apohara-codesearch?style=for-the-badge&label=Scorecard)](https://scorecard.dev/viewer/?uri=github.com/SuarezPM/apohara-codesearch)
-<!-- CII / OpenSSF Best Practices: enroll the project at https://www.bestpractices.dev to
-     obtain <PROJECT_ID>, then replace it below to activate the badge. -->
-[![OpenSSF Best Practices](https://img.shields.io/badge/OpenSSF%20Best%20Practices-pending%20enrollment-lightgrey?style=for-the-badge)](https://www.bestpractices.dev)
-<!-- Once enrolled, swap the placeholder badge above for:
-     [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/<PROJECT_ID>/badge)](https://www.bestpractices.dev/projects/<PROJECT_ID>) -->
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13118/badge)](https://www.bestpractices.dev/projects/13118)
 
 **[Quick Start](#-quick-start)** · **[Features](#-features)** · **[Where it fits](#-where-it-fits)** · **[How it works](#-how-it-works--honesty)**
 
@@ -205,18 +201,24 @@ apohara-codesearch/
 - [x] Multi-repo schema — composite `PRIMARY KEY(repo_id, path)` + sidecar JSON registry, versioned backward-compatible migration
 - [x] `SECURITY.md` threat model + OpenSSF Scorecard workflow
 - [x] **Code-trained embedding model — EmbeddingGemma-300m in pure candle** (opt-in `gguf-embed`, user-supplied weights, no native deps, parity 0.99998 vs the official ONNX reference). Measured on CodeSearchNet: the vector arm goes from feature-hash noise (recall@5 0.34/0.005/0.035) to **0.95/0.99/0.885**, hybrid now **beats BM25-only on all 3 slices**, and the adaptive recovery gate (AC4) **closes** — see [BENCHMARK.md](BENCHMARK.md). Default build stays zero-model/offline.
-- [ ] OpenSSF Best Practices enrollment (badge pending)
+- [x] **OpenSSF Best Practices** — enrolled ([#13118](https://www.bestpractices.dev/projects/13118)); Passing + Silver criteria mapped to evidence in [`docs/best-practices-silver.md`](docs/best-practices-silver.md), with governance (`CONTRIBUTING`/`CODE_OF_CONDUCT`/`GOVERNANCE`/`CHANGELOG`), an [assurance case](docs/ASSURANCE.md), and supply-chain CI (`cargo-deny` + `cargo-audit` + Dependabot + offline-isolation guard)
+
+---
+
+## 🔐 Security
+
+Found a vulnerability? Please report it **privately** via [GitHub Security Advisories](https://github.com/SuarezPM/apohara-codesearch/security/advisories/new) — see [`SECURITY.md`](SECURITY.md) for the disclosure process, supported versions, and the **threat model** (what the tool defends and what is deliberately out of scope). The full **assurance case** (security requirements, trust boundaries, the secure-design argument, and how common weaknesses are countered) is in [`docs/ASSURANCE.md`](docs/ASSURANCE.md). Supply-chain health is tracked by an [OpenSSF Scorecard](https://scorecard.dev/viewer/?uri=github.com/SuarezPM/apohara-codesearch) workflow and the [OpenSSF Best Practices](https://www.bestpractices.dev/projects/13118) badge; the per-criterion evidence map is in [`docs/best-practices-silver.md`](docs/best-practices-silver.md).
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome.
+Contributions are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the build/test/quality gate, coding standards, testing policy, Conventional Commits, and the DCO sign-off. Participation is governed by the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) (Contributor Covenant 3.0); how the project is run and how it continues is in [`GOVERNANCE.md`](GOVERNANCE.md); release-by-release changes are in [`CHANGELOG.md`](CHANGELOG.md).
 
 1. **Fork** the repository.
 2. Create a feature **branch** (`git checkout -b feature/my-change`).
 3. Make your change and run the suite: `cargo test --workspace` (clippy `-D warnings` + `rustfmt --check` gate CI).
-4. Open a **pull request**.
+4. Open a **pull request** (sign off your commits with `git commit -s`).
 
 > Unless you state otherwise, any contribution you intentionally submit for inclusion in this work, as defined in the Apache-2.0 license, shall be dual-licensed as below, without any additional terms or conditions.
 
