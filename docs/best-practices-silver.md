@@ -33,7 +33,7 @@ remaining step. Highlights (the full Silver table below subsumes the rest):
 | Criterion | Status | Evidence |
 |---|---|---|
 | `description_good`, `interact`, `contribution`, `contribution_requirements` | Met | `README.md`, GitHub Issues/PRs, `CONTRIBUTING.md`. |
-| `floss_license`, `license_location` | Met | MIT OR Apache-2.0; `LICENSE-MIT` + `LICENSE-APACHE` at repo root. |
+| `floss_license`, `license_location` | Met | MIT OR Apache-2.0. A top-level `LICENSE` file (standard location the BadgeApp scanner recognizes) declares the dual license and points to the full texts in `LICENSE-MIT` + `LICENSE-APACHE` (Rust convention). |
 | `documentation_basics`, `documentation_interface` | Met | `README.md` (Quick Start, Tools, How it works) + the MCP tool docs. |
 | `repo_public`, `repo_track`, `repo_distributed` | Met | Public Git on GitHub; full history; standard Git. |
 | `version_unique`, `version_semver`, `version_tags` | Met | SemVer; `vX.Y.Z` tags; `CHANGELOG.md`. |
