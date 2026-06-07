@@ -49,3 +49,55 @@ jobs:
       # but the committed workflow doesn't" — the regeneration must be in sync.
       - name: dist generate --check
         run: dist generate --check
+
+  # Locks the project's core invariant: the DEFAULT build makes no network
+  # calls. It asserts the resolved normal-dependency tree links no HTTP client
+  # crate (reqwest/hyper/ureq/curl/hf-hub/isahc/attohttpc). tokio is present as
+  # the async runtime for the stdio MCP transport + file watcher, which is fine;
+  # an HTTP client is not. A future edit that drags one in breaks this job.
+  offline-isolation:
+    name: offline isolation (no HTTP client in default build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Assert the default build links no HTTP client
+        run: |
+          tree="$(cargo tree -e normal)"
+          if echo "$tree" | grep -qiE 'reqwest|hyper|ureq|curl|hf-hub|isahc|attohttpc'; then
+            echo "::error::default build pulled an HTTP client — the offline invariant is broken."
+            echo "$tree" | grep -iE 'reqwest|hyper|ureq|curl|hf-hub|isahc|attohttpc'
+            exit 1
+          fi
+          echo "ok: the default build links no HTTP client"
+
+  # Dependency-license / advisory / source policy. Uses the repo's deny.toml
+  # (`[graph] all-features = true`, so the opt-in gguf-embed/candle tree is
+  # covered too). Reviewed advisory exceptions live in deny.toml.
+  deny:
+    name: deny (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  # Vulnerability scan of the dependency tree (RUSTSEC). The single documented
+  # exception (RUSTSEC-2024-0436, `paste` unmaintained, opt-in tree only) is
+  # mirrored from deny.toml as an --ignore flag. Re-evaluate on each candle bump.
+  audit:
+    name: audit (cargo-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo audit
+        run: cargo audit --ignore RUSTSEC-2024-0436

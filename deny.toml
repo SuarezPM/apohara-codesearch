@@ -1,0 +1,57 @@
+# cargo-deny configuration — supply-chain policy gate.
+# Checked in CI (`.github/workflows/ci.yml`, job `deny`) and locally with
+# `cargo deny check`. Covers licenses, advisories, banned crates, and sources.
+
+# Evaluate the whole dependency graph including the opt-in `gguf-embed` feature
+# (candle + tokenizers), so the policy holds for every build configuration, not
+# just the zero-model default.
+[graph]
+all-features = true
+
+[advisories]
+# Use the default RustSec database. Vulnerabilities and unmaintained crates are
+# denied by default in this cargo-deny version; yanked crates warn.
+yanked = "warn"
+# Reviewed exceptions only — each with a justification and a link.
+ignore = [
+    # `paste` is unmaintained (not a vulnerability). It is a transitive,
+    # build-time proc-macro pulled ONLY by the opt-in `gguf-embed` tree
+    # (candle -> gemm -> paste); it has no runtime/security surface and no safe
+    # upgrade is available upstream. The default zero-model build does not pull
+    # it. Re-evaluate on each candle bump.
+    # https://rustsec.org/advisories/RUSTSEC-2024-0436
+    "RUSTSEC-2024-0436",
+]
+
+[licenses]
+# Permissive-only allow-list. A dependency under any other license fails the
+# gate and must be reviewed (and either justified here or replaced).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "BSL-1.0",
+    "0BSD",
+    # Weak file-level copyleft. Present transitively (e.g. `option-ext` via
+    # `dirs`); the files are used unmodified, so there is no obligation on this
+    # project's own MIT/Apache-2.0 source.
+    "MPL-2.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Duplicate versions are a hygiene smell, not a hard error in a young tree; warn.
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+# Only crates.io is expected. An unknown registry or git source fails the gate.
+unknown-registry = "deny"
+unknown-git = "deny"

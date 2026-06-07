@@ -1,0 +1,21 @@
+# Dependabot: automated dependency-update PRs.
+# Keeps the Cargo tree and the GitHub Actions pinned in workflows current, so
+# security and maintenance updates are surfaced as reviewable PRs rather than
+# drifting silently.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(ci)"

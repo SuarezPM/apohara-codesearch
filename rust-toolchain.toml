@@ -1,0 +1,8 @@
+# Pin the toolchain channel so a checkout builds with a known, consistent
+# toolchain (supports the build-repeatability claim: Cargo.lock pins the deps,
+# this pins the channel). Rolling `stable` — not a frozen version — so bit-for-bit
+# reproducibility across compiler patch releases is not promised; see
+# docs/best-practices-silver.md (`build_repeatable`).
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]
