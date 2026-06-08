@@ -165,24 +165,32 @@ See **[BENCHMARK.md](BENCHMARK.md)** for the method, the reproduce command, and 
 apohara-codesearch/
 ├── crates/
 │   ├── apohara-indexer/        # the engine (library)
-│   │   └── src/
-│   │       ├── walker.rs        # .gitignore-aware file walk
-│   │       ├── parser.rs        # tree-sitter structural extraction (Rust/TS/Python/Go)
-│   │       ├── chunker.rs       # per-symbol + bounded module/window chunks
-│   │       ├── tokens.rs        # shared snake/camel identifier tokenizer
-│   │       ├── embeddings.rs    # deterministic blake3 feature-hash vector
-│   │       ├── embedder.rs      # pluggable Embedder trait (opt-in gguf-embed)
-│   │       ├── storage.rs       # SQLite: chunks + FTS5 + sqlite-vec
-│   │       ├── schema.rs        # migrations + embedder refuse-to-mix meta
-│   │       ├── search.rs        # BM25 + vector + RRF + MMR + adaptive weights + boost
-│   │       ├── incremental.rs   # blake3-delta reindex in one transaction
-│   │       └── registry.rs      # multi-repo path→index sidecar JSON registry
+│   │   ├── src/
+│   │   │   ├── walker.rs        # .gitignore-aware file walk (skips binary/minified)
+│   │   │   ├── parser.rs        # tree-sitter structural extraction (Rust/TS/Python/Go)
+│   │   │   ├── chunker.rs       # per-symbol + bounded module/window chunks
+│   │   │   ├── tokens.rs        # shared snake/camel identifier tokenizer
+│   │   │   ├── embeddings.rs    # deterministic blake3 feature-hash vector (default)
+│   │   │   ├── embedder.rs      # pluggable Embedder trait + fallback decision
+│   │   │   ├── embedder_gemma.rs # EmbeddingGemma-300m in pure candle (opt-in gguf-embed)
+│   │   │   ├── storage.rs       # SQLite: chunks + FTS5 + sqlite-vec (dim-parametrized)
+│   │   │   ├── schema.rs        # migrations + embedder refuse-to-mix meta
+│   │   │   ├── search.rs        # BM25 + vector + RRF + MMR + adaptive weights + boost
+│   │   │   ├── incremental.rs   # blake3-delta reindex in one transaction
+│   │   │   └── registry.rs      # multi-repo path→index sidecar JSON registry
+│   │   └── tests/              # integration · persistence · rrf_proof · robustness (hostile input)
 │   └── apohara-codesearch/     # the MCP server + CLI
 │       ├── src/{main,server,watch,dto}.rs
-│       └── examples/           # bench-search (in-CI) · bench-external · bench-codesearchnet (one-off)
+│       └── examples/           # bench-search (in-CI) · bench-external · bench-codesearchnet · bench-csn-identifier
+├── fuzz/                        # cargo-fuzz targets (parse_source, chunk_file) — isolated crate
 ├── npm/                         # @apohara/codesearch-mcp wrapper (downloads the Release binary)
+├── docs/                        # ASSURANCE.md (assurance case) · best-practices-silver.md (OpenSSF evidence)
+├── .clusterfuzzlite/            # ClusterFuzzLite build (Dockerfile + build.sh) for PR fuzzing
 ├── .claude-plugin/ + marketplace.json   # Claude Code plugin manifest
-└── .github/workflows/          # ci.yml (test/clippy/fmt/dist) · release.yml (cargo-dist)
+├── CONTRIBUTING · CODE_OF_CONDUCT · GOVERNANCE · CHANGELOG · SECURITY · deny.toml
+└── .github/
+    ├── workflows/              # ci · release (cargo-dist) · codeql · scorecard · cflite_pr
+    └── dependabot.yml          # weekly cargo + github-actions updates
 ```
 
 ---
