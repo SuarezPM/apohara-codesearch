@@ -16,6 +16,8 @@
 
 **[Quick Start](#-quick-start)** · **[Features](#-features)** · **[Where it fits](#-where-it-fits)** · **[How it works](#-how-it-works--honesty)**
 
+**Latest release: [v0.2.0](https://github.com/SuarezPM/apohara-codesearch/releases/tag/v0.2.0) — 2026-06-07** — published to [crates.io](https://crates.io/crates/apohara-codesearch) and [npm](https://www.npmjs.com/package/@apohara/codesearch-mcp); SLSA Build L3 provenance on every artifact.
+
 A single Rust binary that runs as a [Model Context Protocol](https://modelcontextprotocol.io) server, giving a coding agent fast, **fully-offline** hybrid search over any local repository — no embedding model to download, no external vector or graph database. It installs in seconds, runs air-gapped in a few megabytes of RAM, and keeps its entire state in **one SQLite file**.
 
 </div>
@@ -207,6 +209,7 @@ apohara-codesearch/
 - [x] Real local embedder backend (candle / safetensors, opt-in, user-supplied)
 - [x] Skip generated/minified assets in the walker (DB-bloat hardening)
 - [x] Per-language chunk-cap validation (TypeScript / Python)
+- [x] **End-to-end robustness over hostile untrusted input** (parser + chunker fuzzed in CI, random/garbage files must not panic the indexer)
 - [x] **CodeSearchNet** `recall@5`/`MRR` benchmark — 4 arms (BM25 / vector / hybrid / hybrid+MMR), env-pointed, never vendored
 - [x] Adaptive query-shape fusion weighting (opt-in, default off)
 - [x] **SLSA Build L3** signed provenance on every release artifact (cargo-dist native attestation)
