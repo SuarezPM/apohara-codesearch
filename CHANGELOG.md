@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-07
+
 ### Added
 
 - **Real EmbeddingGemma embedder in pure candle** (opt-in `gguf-embed`): a
@@ -31,6 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Pinned-Dependencies), and least-privilege **top-level `contents: read`** token
   permissions across every workflow (Token-Permissions), with write elevated
   per-job only where the release is created/published.
+- **Fuzzing**: `cargo-fuzz` targets over the untrusted-input surface
+  (`parse_source` + `chunk_file`) plus a **ClusterFuzzLite** setup that runs them
+  on PRs (Scorecard Fuzzing). The `fuzz/` crate is isolated from the main
+  workspace.
+- **Registry publishing**: `release.yml` now publishes the crates to **crates.io**
+  (`cargo publish`, indexer first then bin) and the npx wrapper to **npm**
+  (Scorecard Packaging). Adds the crate metadata crates.io requires
+  (`description`/`keywords`/`categories`/`repository`).
+- **Branch protection** on `main`: PRs + strict status checks (CI, CodeQL, deny,
+  audit, offline-isolation) + linear history + no force-push, enforced for admins.
 
 ### Changed
 
@@ -88,6 +100,7 @@ server: one Rust binary, no model, no database.
   external real-OSS comparison, with ≥30% committed known-miss queries.
 - **Dual license**: MIT OR Apache-2.0.
 
-[Unreleased]: https://github.com/SuarezPM/apohara-codesearch/compare/v0.2.0-rc.1...HEAD
+[Unreleased]: https://github.com/SuarezPM/apohara-codesearch/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/SuarezPM/apohara-codesearch/compare/v0.2.0-rc.1...v0.2.0
 [0.2.0-rc.1]: https://github.com/SuarezPM/apohara-codesearch/compare/v0.1.0...v0.2.0-rc.1
 [0.1.0]: https://github.com/SuarezPM/apohara-codesearch/releases/tag/v0.1.0
