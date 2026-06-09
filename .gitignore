@@ -9,3 +9,11 @@ npm/node_modules/
 # OS / editor cruft
 .DS_Store
 *.swp
+
+# Per-project Claude Code / OMC state (local-only, not shared)
+.claude/
+.omc/
+.cocoindex_code/
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
