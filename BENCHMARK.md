@@ -653,3 +653,13 @@ pass with the corpus absent:
 > file-order prefixes, so the numbers are byte-stable and reproducible; a deeper
 > run only needs a larger cap and more wall-clock. The corpus is never vendored;
 > the sha256s pin the exact bytes measured.
+
+## v0.3.0 baseline (corpus A frozen at `d045e86c`)
+
+Per the v0.3.0 plan (`.omc/plans/apohara-codesearch-3frentes.md` §6 "Corpus freeze"), the v0.3.0 default-flip measurement uses a frozen copy of `examples/bench-corpus/` rather than the live corpus, so the measurement is reproducible independent of subsequent grammar-label regeneration work.
+
+- **Corpus A (BENCHMARK baseline):** `tests/fixtures/bench-corpus-frozen-A/`, content-hash `d045e86ca978935f1a292b631941b8bde3d3341f49179a94fdfbebb1a2890b29`, freeze commit `f52bdfd`. 22 files, byte-identical to `examples/bench-corpus/` at the v0.2.0 release.
+- **Corpus B (golden test):** `tests/fixtures/bench-corpus-frozen-B/queries.json`, content-hash `f5da3d598daee07528676a4ab528db7a70c15a7bd37d245da443857c55338ab2`, freeze commit `15a2deb`. 10 hand-picked queries for the F3 default-flip golden test.
+- **Guard test:** `crates/apohara-codesearch/tests/corpus_freeze.rs` pins both content-hashes and fails on any drift. Re-freeze by updating `CORPUS_A_EXPECTED_HASH` / `CORPUS_B_EXPECTED_HASH` in the test and adding a `chore(bench): refreeze corpus X` commit.
+
+The F3-MEASURE story will populate this section with the v0.2.0-baseline recall/MRR numbers and the post-flip delta. Until then, this section documents the freeze only.
