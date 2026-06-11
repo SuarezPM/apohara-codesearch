@@ -1,0 +1,29 @@
+CHANGELOG (bench-corpus, plain text — unparsed by the indexer)
+==============================================================
+
+This file is windowed into fixed-size line chunks. It carries release-note prose
+that does not exist as any symbol, so a query about a specific historical change
+can only be answered from this text.
+
+0.4.0
+-----
+- Added a token-bucket rate limiter to gate inbound requests.
+- Introduced an LRU cache for hot price-book lookups.
+- Switched all money math to integer cents to remove floating rounding drift.
+
+0.3.0
+-----
+- Added Heron's-formula triangle area to the geometry module.
+- Email validation now trims surrounding whitespace before checking shape.
+- Sessions expire purely on elapsed-seconds arithmetic (no wall-clock lock).
+
+0.2.0
+-----
+- Added exponential backoff with deterministic jitter for retries.
+- Added Levenshtein edit distance for fuzzy string comparison.
+- Added a breadth-first reachability count to the directed graph.
+
+0.1.0
+-----
+- Initial corpus: billing, geometry, validation, pricing, and statistics.
+- Feature-hash vector index plus FTS5 lexical index, fused with RRF.
