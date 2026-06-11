@@ -1,0 +1,56 @@
+{
+  "_comment": "Corpus B: golden test subset for v0.3.0 default-flip verification. 10 representative queries hand-picked from the synthetic benchmark (per .omc/plans/apohara-codesearch-3frentes.md §6 'Corpus freeze' Corpus B). Each entry: query string + expected top-1 file:start-end. The expected top-1 must hold BYTE-IDENTICALLY across v0.2.0, v0.3.0-pre-flip, and v0.3.0-post-flip. The set of {top-2, top-3} must hold as an unordered set (not a brittle exact ordering).",
+  "freeze_commit": "PLACEHOLDER_FILLED_AT_COMMIT",
+  "queries": [
+    {
+      "id": "Q01",
+      "query": "function that opens a file and parses JSON",
+      "expected_top1": "examples/bench-corpus/src/json_parse.rs:1-12"
+    },
+    {
+      "id": "Q02",
+      "query": "HTTP server request handler",
+      "expected_top1": "examples/bench-corpus/src/server.ts:5-30"
+    },
+    {
+      "id": "Q03",
+      "query": "Python class with __init__ method",
+      "expected_top1": "examples/bench-corpus/src/user.py:1-25"
+    },
+    {
+      "id": "Q04",
+      "query": "Go function returning error",
+      "expected_top1": "examples/bench-corpus/src/handler.go:1-18"
+    },
+    {
+      "id": "Q05",
+      "query": "struct with fields and methods",
+      "expected_top1": "examples/bench-corpus/src/types.rs:1-30"
+    },
+    {
+      "id": "Q06",
+      "query": "TypeScript interface for a user",
+      "expected_top1": "examples/bench-corpus/src/api.ts:10-22"
+    },
+    {
+      "id": "Q07",
+      "query": "Python decorator for caching",
+      "expected_top1": "examples/bench-corpus/src/cache.py:1-15"
+    },
+    {
+      "id": "Q08",
+      "query": "Go goroutine spawn pattern",
+      "expected_top1": "examples/bench-corpus/src/worker.go:1-20"
+    },
+    {
+      "id": "Q09",
+      "query": "Rust Result error handling",
+      "expected_top1": "examples/bench-corpus/src/error.rs:1-25"
+    },
+    {
+      "id": "Q10",
+      "query": "JavaScript async function with await",
+      "expected_top1": "examples/bench-corpus/src/async.ts:1-20"
+    }
+  ]
+}

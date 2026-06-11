@@ -70,3 +70,6 @@ tokio = { version = "1", default-features = false, features = ["rt", "io-std", "
 [dev-dependencies]
 # Temp repos for the watch integration test (matches apohara-indexer's tests).
 tempfile = "3"
+# SHA-256 hashing for tests/corpus_freeze.rs (content-hash pinning of Corpus A & B).
+# The workspace's tree-sitter 0.26 / blake3 deps don't transitively pull sha2.
+sha2 = "0.10"
