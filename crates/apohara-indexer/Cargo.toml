@@ -50,6 +50,7 @@ tree-sitter-typescript = { workspace = true }
 tree-sitter-python = { workspace = true }
 tree-sitter-go = { workspace = true }
 tree-sitter-bash = { workspace = true }
+tree-sitter-java = { workspace = true }
 blake3 = { workspace = true }
 dirs = { workspace = true }
 # `ignore` powers the later walker (gitignore-aware filesystem traversal).

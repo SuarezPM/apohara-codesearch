@@ -10,6 +10,7 @@ pub enum Language {
     Python,
     Go,
     Bash,
+    Java,
 }
 
 /// Represents an import statement
@@ -198,6 +199,7 @@ pub fn detect_language(path: &Path) -> Option<Language> {
         Some("py") => Some(Language::Python),
         Some("go") => Some(Language::Go),
         Some("bash") | Some("sh") => Some(Language::Bash),
+        Some("java") => Some(Language::Java),
         _ => None,
     }
 }
@@ -246,6 +248,11 @@ pub fn parse_source(
                 .set_language(&tree_sitter_bash::LANGUAGE.into())
                 .map_err(|e| ParseError::ParserInit(format!("Bash: {:?}", e)))?;
         }
+        Language::Java => {
+            parser
+                .set_language(&tree_sitter_java::LANGUAGE.into())
+                .map_err(|e| ParseError::ParserInit(format!("Java: {:?}", e)))?;
+        }
     }
 
     let tree = parser.parse(source, None).ok_or(ParseError::ParseFailed)?;
@@ -259,6 +266,7 @@ pub fn parse_source(
         Language::Python => extract_python_functions(&root, source, &mut signatures),
         Language::Go => extract_go_functions(&root, source, &mut signatures),
         Language::Bash => extract_bash_functions(&root, source, &mut signatures),
+        Language::Java => extract_java_functions(&root, source, &mut signatures),
     }
 
     Ok(signatures)
@@ -656,6 +664,11 @@ pub fn parse_source_imports_exports(
                 .set_language(&tree_sitter_bash::LANGUAGE.into())
                 .map_err(|e| ParseError::ParserInit(format!("Bash: {:?}", e)))?;
         }
+        Language::Java => {
+            parser
+                .set_language(&tree_sitter_java::LANGUAGE.into())
+                .map_err(|e| ParseError::ParserInit(format!("Java: {:?}", e)))?;
+        }
     }
 
     let tree = parser.parse(source, None).ok_or(ParseError::ParseFailed)?;
@@ -696,6 +709,18 @@ pub fn parse_source_imports_exports(
             // Bash "exports" = the `export` builtin (mark a variable for the
             // environment). Captured as export rows.
             extract_bash_exports(&root, source, &mut exports);
+        }
+        Language::Java => {
+            // Java imports: `import_declaration` nodes carry the package/class
+            // path as a scoped_identifier or identifier child. Captured as
+            // Named imports.
+            extract_java_imports(&root, source, &mut imports);
+            // Java "exports": there is no syntactic export. Public visibility
+            // is modeled on the class/interface/method itself, not via an
+            // export keyword. We model this implicitly via the type symbol
+            // pass: `extract_java_type_spans` emits `Class`/`Interface`/`Enum`
+            // symbols whose presence in the symbols table IS the export
+            // surface. We intentionally leave `exports` empty here.
         }
     }
 
@@ -1382,6 +1407,11 @@ pub fn parse_source_spans(
                 .set_language(&tree_sitter_bash::LANGUAGE.into())
                 .map_err(|e| ParseError::ParserInit(format!("Bash: {:?}", e)))?;
         }
+        Language::Java => {
+            parser
+                .set_language(&tree_sitter_java::LANGUAGE.into())
+                .map_err(|e| ParseError::ParserInit(format!("Java: {:?}", e)))?;
+        }
     }
 
     let tree = parser.parse(source, None).ok_or(ParseError::ParseFailed)?;
@@ -1395,6 +1425,7 @@ pub fn parse_source_spans(
         Language::Python => extract_python_function_spans(&root, source, &mut spans),
         Language::Go => extract_go_function_spans(&root, source, &mut spans),
         Language::Bash => extract_bash_function_spans(&root, source, &mut spans),
+        Language::Java => extract_java_function_spans(&root, source, &mut spans),
     }
 
     Ok(spans)
@@ -2227,6 +2258,169 @@ fn extract_bash_exports(node: &Node, source: &str, exports: &mut Vec<ExportState
     let cursor = &mut node.walk();
     for child in node.children(cursor) {
         extract_bash_exports(&child, source, exports);
+    }
+}
+
+// ============================================================================
+// Java extraction
+// ============================================================================
+
+/// Extract method signatures from Java source.
+///
+/// Mirrors the Python extractor's pattern: a recursive child walk where
+/// `method_declaration` (inside a `class_body` or `interface_body`) is the
+/// unit, and class/interface/enum/record declarations are descended into to
+/// reach their methods. Each class/interface/enum/record is also emitted as a
+/// type symbol so the chunker indexes its `kind` correctly.
+fn extract_java_functions(node: &Node, source: &str, signatures: &mut Vec<FunctionSignature>) {
+    let cursor = &mut node.walk();
+
+    for child in node.children(cursor) {
+        match child.kind() {
+            "class_declaration"
+            | "interface_declaration"
+            | "enum_declaration"
+            | "record_declaration" => {
+                // The class/interface/enum/record name lives in field "name".
+                if let Some(sig) = type_symbol(&child, source) {
+                    signatures.push(sig);
+                }
+                // Descend into the body to capture methods.
+                let body_kinds = ["class_body", "interface_body", "enum_body"];
+                for bk in &body_kinds {
+                    if let Some(body) = child.child_by_field_name(bk) {
+                        extract_java_functions(&body, source, signatures);
+                        break;
+                    }
+                }
+            }
+            "method_declaration" | "constructor_declaration" => {
+                if let Some(sig) = parse_java_method(&child, source) {
+                    signatures.push(sig);
+                }
+            }
+            _ => {
+                extract_java_functions(&child, source, signatures);
+            }
+        }
+    }
+}
+
+/// Parse a Java `method_declaration` (field `name: identifier`).
+fn parse_java_method(node: &Node, source: &str) -> Option<FunctionSignature> {
+    let name = node
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+        .map(|s| s.to_string())?;
+
+    let start_position = node.start_position();
+    let mut sig =
+        FunctionSignature::new(name).with_position(start_position.row + 1, start_position.column);
+    if let Some(params) = node.child_by_field_name("parameters") {
+        let p_cursor = &mut params.walk();
+        for param in params.children(p_cursor) {
+            if param.kind() == "formal_parameter" || param.kind() == "spread_parameter" {
+                if let Some(p_name) = param.child_by_field_name("name") {
+                    if let Ok(p_text) = p_name.utf8_text(source.as_bytes()) {
+                        let type_text = param
+                            .child_by_field_name("type")
+                            .and_then(|t| t.utf8_text(source.as_bytes()).ok())
+                            .map(|s| s.to_string());
+                        sig.parameters.push(Parameter {
+                            name: p_text.to_string(),
+                            type_annotation: type_text,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Some(sig)
+}
+
+/// Extract spans of Java methods and type symbols. Mirrors `extract_python_function_spans`.
+fn extract_java_function_spans(
+    node: &Node,
+    source: &str,
+    spans: &mut Vec<(FunctionSignature, SymbolKind, usize, usize)>,
+) {
+    let cursor = &mut node.walk();
+
+    for child in node.children(cursor) {
+        match child.kind() {
+            "class_declaration" => {
+                if let Some(sig) = type_symbol(&child, source) {
+                    spans.push(span_of(&child, sig, SymbolKind::Class));
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_java_function_spans(&body, source, spans);
+                }
+            }
+            "interface_declaration" => {
+                if let Some(sig) = type_symbol(&child, source) {
+                    spans.push(span_of(&child, sig, SymbolKind::Interface));
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_java_function_spans(&body, source, spans);
+                }
+            }
+            "enum_declaration" => {
+                if let Some(sig) = type_symbol(&child, source) {
+                    spans.push(span_of(&child, sig, SymbolKind::Enum));
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_java_function_spans(&body, source, spans);
+                }
+            }
+            "record_declaration" => {
+                if let Some(sig) = type_symbol(&child, source) {
+                    // Records are class-like; emit as Class for now.
+                    spans.push(span_of(&child, sig, SymbolKind::Class));
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_java_function_spans(&body, source, spans);
+                }
+            }
+            "method_declaration" | "constructor_declaration" => {
+                if let Some(sig) = parse_java_method(&child, source) {
+                    spans.push(span_of(&child, sig, SymbolKind::Function));
+                }
+            }
+            _ => {
+                extract_java_function_spans(&child, source, spans);
+            }
+        }
+    }
+}
+
+/// Extract Java `import_declaration` nodes as Named imports.
+/// Java imports carry the package/class path as a `scoped_identifier` or
+/// `identifier` child. We capture its full UTF-8 text.
+fn extract_java_imports(node: &Node, source: &str, imports: &mut Vec<ImportStatement>) {
+    if node.kind() == "import_declaration" {
+        let line = node.start_position().row + 1;
+        // The path is a `scoped_identifier` or `identifier` child.
+        let cursor = &mut node.walk();
+        for child in node.children(cursor) {
+            let k = child.kind();
+            if k == "scoped_identifier" || k == "identifier" {
+                if let Ok(text) = child.utf8_text(source.as_bytes()) {
+                    imports.push(
+                        ImportStatement::new(
+                            text.to_string(),
+                            ImportKind::Named(vec![text.to_string()]),
+                        )
+                        .with_line(line),
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
+    let cursor = &mut node.walk();
+    for child in node.children(cursor) {
+        extract_java_imports(&child, source, imports);
     }
 }
 
@@ -3149,5 +3343,95 @@ declare -x SECRET_TOKEN="xyz"
         for s in &sigs {
             assert!(s.line >= 1, "sig {} has invalid line {}", s.name, s.line);
         }
+    }
+
+    #[test]
+    fn test_detect_language_java() {
+        // .java maps to Java. Existing languages must remain unaffected.
+        assert_eq!(detect_language(Path::new("Foo.java")), Some(Language::Java));
+        assert_eq!(detect_language(Path::new("foo.jj")), None);
+        assert_eq!(detect_language(Path::new("Foo.JAVA")), None);
+    }
+
+    #[test]
+    fn test_parse_java_function_spans() {
+        // Class with one method, an interface, an enum, and a record.
+        // The class/interface/enum/record are emitted as type symbols;
+        // the method is a Function symbol inside the class body.
+        let source = r#"public interface Greeter {
+    void greet(String name);
+}
+
+public class Hello {
+    public static void main(String[] args) {
+        System.out.println("hi");
+    }
+}
+
+public enum Color { RED, GREEN, BLUE }
+"#;
+
+        let spans = parse_source_spans(source, Language::Java).unwrap();
+
+        // Type symbols: build a simple predicate rather than sorting (SymbolKind
+        // doesn't derive Ord and we only need existence checks here).
+        let has_kind = |name: &str, k: SymbolKind| -> bool {
+            spans.iter().any(|(s, kk, _, _)| s.name == name && *kk == k)
+        };
+        assert!(has_kind("Greeter", SymbolKind::Interface));
+        assert!(has_kind("Hello", SymbolKind::Class));
+        assert!(has_kind("Color", SymbolKind::Enum));
+
+        // Method symbol inside the class body.
+        let method_names: Vec<_> = spans
+            .iter()
+            .filter(|(_, k, _, _)| *k == SymbolKind::Function)
+            .map(|(s, _, _, _)| s.name.as_str())
+            .collect();
+        assert!(method_names.contains(&"main"));
+    }
+
+    #[test]
+    fn test_parse_java_imports() {
+        // Scoped + single-identifier + static imports.
+        let source = r#"import java.util.List;
+import java.util.Map;
+import com.example.Foo;
+import static java.util.Collections.emptyList;
+"#;
+
+        let (imports, _exports) = parse_source_imports_exports(source, Language::Java).unwrap();
+
+        let import_sources: Vec<_> = imports.iter().map(|i| i.source.as_str()).collect();
+        assert!(import_sources.contains(&"java.util.List"));
+        assert!(import_sources.contains(&"java.util.Map"));
+        assert!(import_sources.contains(&"com.example.Foo"));
+        // Static imports — the full qualified path is captured.
+        assert!(
+            import_sources
+                .iter()
+                .any(|s| s.contains("Collections.emptyList")),
+            "missing static import, got: {:?}",
+            import_sources
+        );
+    }
+
+    #[test]
+    fn test_parse_file_java_fixture() {
+        // End-to-end on the fixture via parse_source_spans (so type symbols AND
+        // methods are both surfaced — parse_file/parse_source only returns
+        // function signatures, not type symbols; matches the Python/Go/Bash
+        // pattern).
+        let path = std::path::Path::new("tests/fixtures/fixture.java");
+        let source = std::fs::read_to_string(path).expect("read fixture.java");
+        let spans = parse_source_spans(&source, Language::Java).unwrap();
+        let names: Vec<_> = spans.iter().map(|(s, _, _, _)| s.name.as_str()).collect();
+        // Class + interface + enum + record + methods.
+        assert!(names.contains(&"Hello"));
+        assert!(names.contains(&"Greeter"));
+        assert!(names.contains(&"Color"));
+        assert!(names.contains(&"Point"));
+        assert!(names.contains(&"main"));
+        assert!(names.contains(&"add"));
     }
 }

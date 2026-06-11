@@ -20,6 +20,7 @@ fuzz_target!(|data: &[u8]| {
         Language::Python,
         Language::Go,
         Language::Bash,
+        Language::Java,
     ] {
         let _ = parse_source(source, language);
     }
