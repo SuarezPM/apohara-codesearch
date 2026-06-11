@@ -1,6 +1,6 @@
 {
   "name": "@apohara/codesearch-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "stdio MCP server wrapper for apohara-codesearch: hybrid (BM25 + vector) local code search exposed over the Model Context Protocol. Downloads the matching prebuilt binary from the GitHub Release on install.",
   "bin": {
     "apohara-codesearch-mcp": "bin/cli.js"

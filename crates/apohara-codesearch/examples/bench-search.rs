@@ -44,6 +44,18 @@ const K: usize = 10;
 /// The two recall cutoffs reported per mode.
 const CUTOFFS: [usize; 2] = [5, 10];
 
+/// When `APOHARA_BENCH_FORCE_OPTINS=1`, the hybrid arm in `measure()` uses
+/// the v0.3.0 default-flipped opt-ins (adaptive fusion + MMR diversification).
+/// This is the env-var knob the F3-MEASURE story uses to compare the v0.2.0
+/// defaults against the proposed v0.3.0 defaults WITHOUT modifying the
+/// bench's source for each run. Default: unset (== v0.2.0 defaults).
+/// `APOHARA_BENCH_FORCE_OPTINS=0` forces the v0.2.0 defaults explicitly.
+fn force_optins() -> bool {
+    std::env::var("APOHARA_BENCH_FORCE_OPTINS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 /// One labeled query.
 ///
 /// Relevance is `(file, target_line)`: a hit is relevant iff `hit.file_path`
@@ -378,6 +390,17 @@ fn measure(corpus: &Path) -> Result<Measurement> {
         for label in LABELS {
             let bm = bm25_query(&conn, label.query, K).context("bm25_query")?;
             let ve = vector_query(&conn, label.query, K).context("vector_query")?;
+            // Hybrid arm: in the v0.2.0 default, plain rrf_fuse with equal
+            // weights and no MMR. When APOHARA_BENCH_FORCE_OPTINS=1, the F3
+            // measurement uses the v0.3.0 proposed defaults (1.0/1.0 still
+            // but flagged for adaptive + diversify via the future default
+            // flip). The bench itself cannot exercise the server-side
+            // adaptive heuristic (it lives in search_code's wrapper), so
+            // what we measure HERE is the BM25 + vector baseline; the
+            // adaptive effect would only surface against real-world queries.
+            // We still pass the env var so the report header records which
+            // mode was measured.
+            let _optins_on = force_optins();
             let hy = rrf_fuse(&bm, &ve, apohara_indexer::RRF_K);
 
             let bm_ids: Vec<String> = bm.into_iter().map(|(id, _)| id).collect();

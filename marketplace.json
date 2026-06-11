@@ -10,7 +10,7 @@
       "name": "apohara-codesearch",
       "source": "./",
       "description": "Zero-dependency, fully offline hybrid code search as one Rust binary. No model download, no database service, runs air-gapped. Two MCP tools: search_code and reindex.",
-      "version": "0.1.0",
+      "version": "0.3.0",
       "author": {
         "name": "Pablo M. Suárez"
       },
