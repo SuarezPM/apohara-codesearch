@@ -443,6 +443,11 @@ fn language_tag(language: &Option<Language>) -> Option<&'static str> {
         Language::TypeScript => "typescript",
         Language::Python => "python",
         Language::Go => "go",
+        Language::Bash => "bash",
+        Language::Java => "java",
+        Language::C => "c",
+        Language::Ruby => "ruby",
+        Language::Cpp => "cpp",
     })
 }
 

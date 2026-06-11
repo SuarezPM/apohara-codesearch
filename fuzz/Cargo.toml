@@ -34,6 +34,57 @@ test = false
 doc = false
 bench = false
 
+# Bash-specific fuzz target. Exercises the four public entry points on
+# untrusted input so error-recovery (ERROR nodes, missing fields) is fuzzed
+# independently of the bundled parse_source target.
+[[bin]]
+name = "parse_bash_source"
+path = "fuzz_targets/parse_bash_source.rs"
+test = false
+doc = false
+bench = false
+
+# Java-specific fuzz target. Same shape as parse_bash_source; covers
+# class/interface/enum/record/method extraction on adversarial input.
+[[bin]]
+name = "parse_java_source"
+path = "fuzz_targets/parse_java_source.rs"
+test = false
+doc = false
+bench = false
+
+# C-specific fuzz target. Covers function_definition + preproc_include
+# extraction on adversarial input. C++ uses tree-sitter-cpp and is a
+# separate target in F1-KOTLIN-CPP.
+[[bin]]
+name = "parse_c_source"
+path = "fuzz_targets/parse_c_source.rs"
+test = false
+doc = false
+bench = false
+
+# Ruby-specific fuzz target. Covers class/module/method/singleton_method
+# extraction. Critical regression target for the R-1.3 anti-gotcha
+# (do_block / block must NOT be emitted as top-level methods).
+[[bin]]
+name = "parse_ruby_source"
+path = "fuzz_targets/parse_ruby_source.rs"
+test = false
+doc = false
+bench = false
+
+# C++-specific fuzz target. Covers function_definition (free + member,
+# via class_specifier / struct_specifier descent) + preproc_include
+# extraction. C and C++ share the function_definition + preproc_include
+# node shapes; C++ adds class_specifier / struct_specifier for member
+# functions and field_identifier for the member function name.
+[[bin]]
+name = "parse_cpp_source"
+path = "fuzz_targets/parse_cpp_source.rs"
+test = false
+doc = false
+bench = false
+
 # Empty workspace table: decouples this crate from the parent workspace so the
 # parent's `cargo build`/clippy/test never tries to build the fuzzers.
 [workspace]

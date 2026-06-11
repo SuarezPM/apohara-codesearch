@@ -13,12 +13,17 @@ fuzz_target!(|data: &[u8]| {
     let Ok(source) = std::str::from_utf8(data) else {
         return;
     };
-    // Exercise every supported grammar so error-recovery is fuzzed for all four.
+    // Exercise every supported grammar so error-recovery is fuzzed for all five.
     for language in [
         Language::Rust,
         Language::TypeScript,
         Language::Python,
         Language::Go,
+        Language::Bash,
+        Language::Java,
+        Language::C,
+        Language::Ruby,
+        Language::Cpp,
     ] {
         let _ = parse_source(source, language);
     }

@@ -259,24 +259,30 @@ fn ac4_hit_shape_and_graceful_degradation() {
         "the parsed .py chunk must be retrievable via vector path"
     );
 
-    // --- Unparsed Ruby hit: graceful degradation. `.rb` is NOT one of the four
-    //     parsed languages, so `detect_language` returns None and legacy.rb is
+    // --- Unparsed-file hit: graceful degradation. Files with an extension
+    //     that no grammar recognizes (`.foo` here, after the v0.3.0 grammar
+    //     expansion now covers Rust/TS/Python/Go/Bash/Java/C/Ruby) are
     //     chunked into fixed-size WINDOWS — no signature, no structural
+    //     imports/exports — yet it is still indexed and hydrates (the "works on
+    //     ANY repo" promise). There is no symbol to resolve by, so the chunk id
+    //     is read straight from the `chunks` table by file path. ---
     //     imports/exports — yet it is still indexed and hydrates (the "works on
     //     ANY repo" promise). There is no symbol to resolve by, so the chunk id
     //     is read straight from the `chunks` table by file path. ---
     let rb_id: String = conn
         .query_row(
-            "SELECT id FROM chunks WHERE id LIKE 'legacy.rb:%' LIMIT 1",
+            "SELECT id FROM chunks WHERE id LIKE 'legacy.foo:%' LIMIT 1",
             [],
             |row| row.get(0),
         )
-        .expect("legacy.rb must produce at least one indexed chunk");
-    let rb_hit = hydrate(&conn, &rb_id).unwrap().expect("rb hit hydrates");
-    assert_eq!(rb_hit.file_path, "legacy.rb");
+        .expect("legacy.foo must produce at least one indexed chunk");
+    let rb_hit = hydrate(&conn, &rb_id)
+        .unwrap()
+        .expect("unparsed hit hydrates");
+    assert_eq!(rb_hit.file_path, "legacy.foo");
     assert_eq!(
         rb_hit.kind, "window",
-        "an unparsed .rb file must be window-chunked, got {}",
+        "an unparsed .foo file must be window-chunked, got {}",
         rb_hit.kind
     );
     assert!(
@@ -355,7 +361,7 @@ fn ac7_incremental_reindex_no_fts5_error() {
     let src = TempDir::new().unwrap();
     let db = TempDir::new().unwrap();
     copy_demo_repo(src.path());
-    let n = 4usize; // demo repo: geometry.rs, validation.ts, util.py, legacy.rb
+    let n = 4usize; // demo repo: geometry.rs, validation.ts, util.py, legacy.foo
 
     let conn = migrated_db(&db);
     let full = index_repo(&conn, src.path()).unwrap();

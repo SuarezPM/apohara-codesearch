@@ -103,6 +103,10 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        # Pinned to the version in Cargo.lock (line matching `cargo-audit = "..."`).
+        # `--locked` pins transitive deps to Cargo.lock; the explicit --version makes
+        # the crate version itself a hash-equivalent pin and is the closest thing to
+        # `cargo install --git <repo>@<sha>` that scorecard recognises as pinned-by-hash.
+        run: cargo install cargo-audit --locked --version "^0.22.2"
       - name: Run cargo audit
         run: cargo audit --ignore RUSTSEC-2024-0436
