@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "apohara-codesearch",
   "displayName": "Apohara Codesearch",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Zero-dependency, fully offline hybrid code search as one Rust binary. No model download, no database service, runs air-gapped. Two MCP tools: search_code and reindex.",
   "author": {
     "name": "Pablo M. Suárez"

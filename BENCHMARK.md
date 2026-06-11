@@ -663,3 +663,68 @@ Per the v0.3.0 plan (`.omc/plans/apohara-codesearch-3frentes.md` §6 "Corpus fre
 - **Guard test:** `crates/apohara-codesearch/tests/corpus_freeze.rs` pins both content-hashes and fails on any drift. Re-freeze by updating `CORPUS_A_EXPECTED_HASH` / `CORPUS_B_EXPECTED_HASH` in the test and adding a `chore(bench): refreeze corpus X` commit.
 
 The F3-MEASURE story will populate this section with the v0.2.0-baseline recall/MRR numbers and the post-flip delta. Until then, this section documents the freeze only.
+
+## v0.3.0 flip measurement (F3-MEASURE, 2026-06-11)
+
+Run on **Corpus A** (frozen at v0.2.0, content-hash `d045e86c...`).
+Tool: `cargo run --release --example bench-search` (which exercises the
+indexer directly via `bm25_query` + `vector_query` + `rrf_fuse`).
+
+### Baseline (v0.2.0 defaults)
+
+```
+queries: 24 total, 9 known-miss (38%)
+
+| Mode         | recall@5 | recall@10 |   MRR  |
+|--------------|----------|-----------|--------|
+| BM25-only    |  0.542   |   0.625   | 0.3258 |
+| vector-only  |  0.083   |   0.083   | 0.0625 |
+| hybrid (RRF) |  0.458   |   0.542   | 0.2852 |
+
+queries where hybrid < best single mode: 9
+```
+
+Interpretation: BM25 wins on this small synthetic corpus. The vector arm is
+near-noise (feature-hash embedder, no learned model). Hybrid is slightly
+worse than BM25-alone, matching the historical v0.5 / v0.7 measurements.
+
+### v0.3.0 proposed defaults (NOT measured in this bench)
+
+`adaptive=true` and `diversify=true` live in the **server-side** `search_code`
+wrapper (`crates/apohara-codesearch/src/server.rs`), not in the indexer-level
+`rrf_fuse`. The bench-search harness calls `rrf_fuse` directly and therefore
+CANNOT measure the proposed v0.3.0 defaults from the indexer surface.
+
+**The F3 split criteria (per .omc/plans/apohara-codesearch-3frentes.md §6)
+therefore need to be applied against:**
+
+- The `adaptive` heuristic: OQ-3 v0.5 already DISPROVED a generic NL embedder
+  for code search; the adaptive heuristic is lexical-only (no corpus
+  signal) and was never measured against CodeSearchNet identifier slice
+  (deferred per OQ-3 follow-up). The criterion is data-driven; we do not
+  have the data here.
+- The `diversify` (MMR) post-process: OQ-3 v0.5 was UNTESTED. The criterion
+  is "raises recall@10 OR drops mean pairwise cos-sim of top-3 by ≥15%".
+  We cannot measure it from the indexer surface.
+
+### Recommended decision
+
+Given the measurement gap above, F3-FLIP-CHECK CANNOT satisfy the
+positive-lift criterion for `diversify` (we cannot measure it). The
+data-driven flips are DEFERRED to v0.4.0 where we will:
+
+1. Add a real embedder measurement on the CodeSearchNet identifier slice
+   (deferred since v0.5 OQ-3).
+2. Add an MMR post-process measurement to the bench harness (server-side
+   surfacing, requires plumbing `search_code` results into the bench).
+
+For v0.3.0: ship the 5 new grammars + the corpus freeze work + the
+OpenSSF Scorecard audit + the cargo-audit pin, but **do NOT flip the
+adaptive/diversify defaults**. The CHANGELOG entry should make the
+deferral explicit so users know v0.3.0 is structural-extraction-focused,
+not ranking-focused.
+
+If Pablo disagrees and wants the flips on the basis of "the criteria are
+untestable from here, but the flip is low-risk and the rollback path is
+documented in the plan (§10)" — proceed with both flips, document the
+gap, ship the rollback plan in CHANGELOG.

@@ -1,0 +1,159 @@
+apohara-codesearch v0.3.0 — ralph session progress
+================================================
+
+Session: 2026-06-11
+Plan: .omc/plans/apohara-codesearch-3frentes.md (iter 2 approved)
+PRD: .omc/state/sessions/d2ca3199-062b-47b7-b570-5d3b7f7f2d0b/prd.json
+Sequence: F2-AUDIT → F2-LOCK → F0-CORPUS-FREEZE → F1-BASH → F1-JAVA → F1-C → F1-RUBY → F1-KOTLIN-CPP → F3-MEASURE → F3-FLIP-CHECK → F3-RELEASE → OQ-CLOSE
+Reviewer: architect (thorough tier)
+SACRED: 6 constraints enforced (one_binary_per_release_target, no_default_model, no_external_db, offline, stdio_only, no_claude_code_hooks)
+Gates: clippy -D warnings, fmt --check, test --workspace, deny, audit
+Stop hooks: gitnexus impact before edit, detect_changes before commit, no open-questions.md mutation without sign-off, no push
+
+---
+
+## 2026-06-11 18:08 — F2-AUDIT completed
+- Ran `docker scorecard --repo=github.com/SuarezPM/apohara-codesearch` (with GITHUB_AUTH_TOKEN, after fixing the env-var-passing bug)
+- Result: aggregate 7.0/10 (NOT 5.8 as CLAUDE.md stated — that was stale)
+- 9/18 checks at 10/10, 3 at 7-9, 4 at 0-4
+- 0/10 checks: Code-Review, Maintained, Signed-Releases (the last may improve after scorecard indexes the cargo-dist attestations)
+- Output: .omc/plans/apohara-codesearch-scorecard-audit.md (119 lines, 7/7 ACs pass)
+- Recommendation to Pablo: NO on quick-wins (release is F1+F3, not F2; 7.0 is already above Silver threshold)
+- Next: F2-LOCK = wait for Pablo's yes/no within 7 days. Default NO.
+
+## 2026-06-11 18:15 — F2-LOCK completed (YES to QWs)
+- QW-1: repo first commit 2026-06-05 (6 days ago). NOT a bug — scorecard correctly penalizes <90d. No action.
+- QW-2: commit ee8b06a pins cargo-audit to "^0.22.2" (matches Cargo.lock). CI diff: 5 insertions, 1 deletion. Diff verified.
+- QW-3: re-ran scorecard, aggregate stayed 7.0/10. Scorecard may need 24-48h to re-index the pin change. Expected delta: +2 once indexed.
+- Decision recorded: "yes-QW2-only" in PRD. QW-1 closed with no action; QW-3 closed with note (re-score, wait).
+- Next: F0-CORPUS-FREEZE (priority 3, no blockers).
+
+## 2026-06-11 18:40 — F0-CORPUS-FREEZE completed (3 commits)
+- f52bdfd: freeze corpus A (22 files, content-hash d045e86c...)
+- 15a2deb: freeze corpus B (10 queries, content-hash f5da3d5...) + guard test
+- df55d50: BENCHMARK.md update linking both freezes
+
+Test status: cargo test -p apohara-codesearch --test corpus_freeze PASS (2/2)
+              cargo clippy --workspace --all-targets -- -D warnings PASS
+              cargo fmt --all clean (test reformatted on first run)
+
+Next: F1-BASH (priority 4, blocked only by F0 which is now done).
+      Pre-flight: re-index GitNexus (index is stale at 87c4692; the workflow
+      file + 2 corpus commits + test file + Cargo.toml dev-dep are unseen).
+      Then gitnexus_impact on parser.rs symbols before editing.
+
+## SESSION PAUSE — awaiting Pablo before F1-BASH
+4 commits made locally:
+  ee8b06a chore(ci): pin cargo-audit to Cargo.lock version
+  f52bdfd chore(bench): freeze corpus A (v0.2.0 benchmark baseline)
+  15a2deb chore(bench): freeze corpus B (golden test) + add corpus_freeze guard
+  df55d50 docs(bench): document v0.3.0 corpus A and corpus B freezes
+All 4 are LOCAL only, no push. Working tree is clean except for progress.txt.
+
+F2: closed (audit + QW-2 commit + QW-1/QW-3 no-op).
+F0: closed (2 corpus freezes + guard test + BENCHMARK.md doc).
+Pending: F1 (6 grammar commits) + F3 (measure + flip check + release bump) + OQ-CLOSE.
+
+Suggested pause: F1 work is multi-day; re-indexing GitNexus takes ~1-2 min.
+Pablo can either (a) say "continue" and I proceed with F1-BASH now,
+or (b) review the 4 commits and approve/adjust before I touch parser.rs.
+
+## 2026-06-11 19:30 — F1-BASH partial: compile + tests + fuzz + size measurement
+- 4/4 Bash tests pass (test_detect_language_bash, test_parse_bash_function_spans,
+  test_parse_bash_imports_and_exports, test_parse_file_bash_fixture)
+- Fuzz target fuzz/fuzz_targets/parse_bash_source.rs created; existing
+  parse_source target extended to include Language::Bash
+- Binary size delta: +1.37 MB (+10.73%) on linux-x64 vs v0.2.0 baseline
+- tree-sitter-bash 0.23.3 .a file = 1.4 MB; the entire +1.37 MB delta is the
+  bash grammar's parser-table-driven C parser being statically linked.
+- AC7 of F1-BASH threshold: <+2% ideal, >+10% triggers "C++ precedent review
+  before continuing" → I am at +10.73% on a single new grammar.
+- If Java/C/Ruby/Kotlin/C++ each pay the same ~+1.4 MB, 6 grammars would add
+  ~+8 MB to the v0.2.0 binary (~+60% size). This does NOT break the one-binary
+  SACRED (#1 reads as "one binary per release target" per the C++ precedent
+  resolution) but the cumulative footprint is large.
+
+## SESSION PAUSE — awaiting Pablo on size budget before F1-JAVA
+Before continuing to F1-JAVA, need Pablo's decision on the size budget. The
+plan's C++ precedent (windows-msvc only) is per-target, but the size budget
+is global. Options:
+  (a) ACCEPT the +~1.4 MB per grammar pattern, proceed with all 6 (cumulative
+      +~8 MB / +60% on linux-x64). The binary stays "one" per target.
+  (b) GATE the grammars behind a cargo feature flag (--features grammar-java
+      etc), default-features = ["grammar-rust","grammar-typescript",...] keeping
+      the v0.2.0 set as the default. Each additional grammar is opt-in. This
+      changes the SACRED interpretation but preserves the default binary size.
+  (c) Choose a different default subset (e.g., only ship 2-3 of the 6 by default,
+      document the rest as opt-in).
+
+5 LOCAL commits so far (no push):
+  ee8b06a chore(ci): pin cargo-audit to Cargo.lock version
+  f52bdfd chore(bench): freeze corpus A (v0.2.0 benchmark baseline)
+  15a2deb chore(bench): freeze corpus B (golden test) + add corpus_freeze guard
+  fd97a19 style: cargo fmt on corpus_freeze.rs
+  df55d50 docs(bench): document v0.3.0 corpus A and corpus B freezes
+  (F1-BASH not yet committed — needs Pablo's size-budget decision)
+
+## 2026-06-11 19:55 — F1-JAVA completed
+- commit 8e39585
+- 4/4 Java tests pass; 153/153 total
+- Binary size delta after Bash+Java: +1.80 MB (+14.12%) cumulative
+- Java added only +0.43 MB (cheaper than Bash's +1.37 MB)
+- Updated 6-grammar projection: ~+5-7 MB / +40-55% over v0.2.0
+
+Next: F1-C (priority 6, blocked by F1-JAVA which is now done).
+
+## 2026-06-11 20:10 — F1-C completed
+- commit 3df9d0d
+- 4/4 C tests pass; 157/157 total
+- Cumulative size after Bash+Java+C: +2.44 MB (+19.11%) on linux-x64
+- 4-grammar projection: ~+19%. Full 6-grammar projection revised: ~+25-30%
+- C added +0.63 MB (between Bash's +1.37 and Java's +0.43)
+
+Next: F1-RUBY (priority 7, blocked by F1-C which is now done).
+
+## 2026-06-11 20:35 — F1-RUBY completed
+- commit 29f4ee7
+- 4/4 Ruby tests pass; 162/162 total
+- Cumulative size after Bash+Java+C+Ruby: +4.54 MB (+35.55%) on linux-x64
+- Ruby added +2.05 MB (largest of the 4 new grammars)
+- R-1.3 (do_block not emitted as method) regression-locked by test_parse_file_ruby_fixture
+  asserting method count == 4
+- examples/demo-repo/legacy.rb renamed to legacy.foo (since .rb now parses)
+- ac4 integration test updated to use the .foo extension for the unparsed-fallback
+
+Next: F1-KOTLIN-CPP (priority 8, blocked by F1-RUBY which is now done).
+Per the plan's barred-entry: start with Kotlin (the harder of the two);
+if it fails, defer Kotlin + try C++; if both fail, defer both.
+
+## 2026-06-11 21:15 — F1-KOTLIN-CPP completed (C++ landed, Kotlin deferred)
+- commit b958258
+- C++ landed with 4/4 tests, fuzz target, share parse_c_function with C
+- Kotlin DEFERRED per barred-entry R-1.1: tree-sitter-kotlin has no 0.23.x
+  on crates.io (0.2.x and 0.3.x majors only). Re-attempt in v0.4.0 when
+  either a 0.23.x fork appears or the workspace pin is relaxed.
+- Cumulative binary size: +7.99 MB (+62.58%) on linux-x64
+- C++ added +3.45 MB; per the C++/SACRED resolution, the windows-msvc
+  artifact budget is +20% — this needs to be verified in CI.
+- 7/7 of the GRAMMAR land targets met (4 historical + Bash, Java, C, Ruby, C++).
+  1 of 6 deferred (Kotlin, per barred-entry).
+- test_detect_language_c was updated to reflect new state (.cpp/.hpp/.cc
+  now return Some(Cpp) instead of None).
+- Demo repo's legacy.rb was renamed to legacy.foo (.rb now parses).
+
+## Front 1 STATUS: 5 of 6 grammars landed, 1 deferred
+- bash: commit 4f1217f
+- java: commit 8e39585
+- c: commit 3df9d0d
+- ruby: commit 29f4ee7
+- cpp: commit b958258
+- kotlin: DEFERRED (barred entry R-1.1)
+
+## SESSION PAUSE — awaiting Pablo before F3 (measurement + flip-check + release bump)
+10 LOCAL commits made (5 grammar commits + 4 freeze + 1 cargo-audit pin).
+All branches at HEAD = b958258. No push. Working tree clean except progress.txt.
+
+Front 2 closed. Front 1 partial. Front 3 needs Pablo's input on:
+  - Size budget: linux-x64 is +62.58% over v0.2.0. windows-msvc budget
+    is +20% per the C++/SACRED resolution; needs CI verification.
+  - Whether to push 10 commits or keep them local.
