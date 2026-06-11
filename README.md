@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.svg" alt="APOHARA · CodeSearch — hybrid code search for your coding agent" width="100%">
+</p>
+
 <div align="center">
 
 # apohara-codesearch

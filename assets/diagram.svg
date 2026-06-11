@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" role="img" width="800" height="500">
+  <title>CodeSearch — agent to snippet flow</title>
+  <defs>
+    <style>
+      .lbl{font-family:system-ui,-apple-system,Segoe UI,sans-serif;letter-spacing:.04em}
+      .m{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    </style>
+  </defs>
+  <rect width="800" height="500" fill="oklch(8% 0.01 260)"/>
+  <rect x="0" y="0" width="2" height="500" fill="oklch(72% 0.13 230)"/>
+  <text x="32" y="44" class="lbl" font-size="20" font-weight="700" fill="oklch(95% 0.01 95)">CodeSearch — agent request flow</text>
+  <text x="32" y="64" class="m" font-size="12" fill="oklch(72% 0.13 230)">mcp.call('codesearch', …)  →  offline index  →  snippet</text>
+  <line x1="32" y1="80" x2="768" y2="80" stroke="oklch(28% 0.01 260)" stroke-width="1"/>
+  <g transform="translate(40,140)">
+    <rect width="170" height="100" rx="8" fill="oklch(14% 0.01 260)" stroke="oklch(28% 0.01 260)" stroke-width="1"/>
+    <text x="14" y="22" class="m" font-size="11" fill="oklch(60% 0.01 95)">01 · agent</text>
+    <text x="14" y="46" class="lbl" font-size="14" font-weight="700" fill="oklch(95% 0.01 95)">planner</text>
+    <text x="14" y="64" class="m" font-size="11" fill="oklch(78% 0.01 95)">needs definition of</text>
+    <text x="14" y="78" class="m" font-size="11" fill="oklch(72% 0.13 230)">parse_bash</text>
+  </g>
+  <g transform="translate(240,140)">
+    <rect width="170" height="100" rx="8" fill="oklch(14% 0.02 230)" stroke="oklch(72% 0.13 230)" stroke-width="1.5"/>
+    <text x="14" y="22" class="m" font-size="11" fill="oklch(72% 0.13 230)">02 · MCP</text>
+    <text x="14" y="44" class="m" font-size="11" fill="oklch(80% 0.01 95)">tool:</text>
+    <text x="14" y="58" class="m" font-size="10" fill="oklch(80% 0.13 230)">"codesearch.search"</text>
+    <text x="14" y="76" class="m" font-size="10" fill="oklch(60% 0.01 95)">pattern: 'parse_bash'</text>
+    <text x="14" y="90" class="m" font-size="10" fill="oklch(60% 0.01 95)">lang: rust</text>
+  </g>
+  <g transform="translate(440,140)">
+    <rect width="170" height="100" rx="8" fill="oklch(14% 0.01 260)" stroke="oklch(28% 0.01 260)" stroke-width="1"/>
+    <text x="14" y="22" class="m" font-size="11" fill="oklch(60% 0.01 95)">03 · offline index</text>
+    <g transform="translate(14,40)" stroke="oklch(72% 0.13 230)" stroke-width="1" fill="none">
+      <rect x="0" y="0" width="14" height="14"/>
+      <rect x="18" y="0" width="14" height="14"/>
+      <rect x="36" y="0" width="14" height="14"/>
+      <rect x="54" y="0" width="14" height="14"/>
+      <rect x="0" y="18" width="14" height="14"/>
+      <rect x="18" y="18" width="14" height="14"/>
+      <rect x="36" y="18" width="14" height="14"/>
+      <rect x="54" y="18" width="14" height="14"/>
+    </g>
+    <text x="100" y="50" class="m" font-size="10" fill="oklch(78% 0.01 95)">ast + trigram</text>
+    <text x="100" y="64" class="m" font-size="10" fill="oklch(78% 0.01 95)">~0.4s/indexed</text>
+    <text x="100" y="78" class="m" font-size="10" fill="oklch(60% 0.01 95)">no daemon, no db</text>
+  </g>
+  <g transform="translate(640,140)">
+    <rect width="120" height="100" rx="8" fill="oklch(20% 0.03 145)" stroke="oklch(72% 0.18 145)" stroke-width="1.5"/>
+    <text x="14" y="22" class="m" font-size="11" fill="oklch(72% 0.18 145)">04 · snippet</text>
+    <text x="14" y="44" class="m" font-size="10" fill="oklch(85% 0.01 95)">fn parse_bash(</text>
+    <text x="14" y="56" class="m" font-size="10" fill="oklch(85% 0.01 95)">  line: &amp;str</text>
+    <text x="14" y="68" class="m" font-size="10" fill="oklch(85% 0.01 95)">) -&gt; Command</text>
+    <text x="14" y="86" class="m" font-size="9" fill="oklch(60% 0.01 95)">src/sh.rs:42</text>
+  </g>
+  <g stroke="oklch(72% 0.13 230)" stroke-width="1.5" fill="none">
+    <line x1="210" y1="190" x2="240" y2="190"/>
+    <polygon points="240,190 232,186 232,194" fill="oklch(72% 0.13 230)"/>
+    <line x1="410" y1="190" x2="440" y2="190"/>
+    <polygon points="440,190 432,186 432,194" fill="oklch(72% 0.13 230)"/>
+    <line x1="610" y1="190" x2="640" y2="190"/>
+    <polygon points="640,190 632,186 632,194" fill="oklch(72% 0.13 230)"/>
+  </g>
+  <g transform="translate(40,300)">
+    <rect width="720" height="140" rx="8" fill="oklch(14% 0.01 260)" stroke="oklch(28% 0.01 260)" stroke-width="1"/>
+    <text x="14" y="22" class="m" font-size="11" fill="oklch(60% 0.01 95)">trace · 1 request, 41ms wall</text>
+    <g class="m" font-size="11" fill="oklch(80% 0.01 95)">
+      <text x="14" y="50">tool_call codesearch.search  pattern='parse_bash'  lang=rust</text>
+      <text x="14" y="68" fill="oklch(72% 0.13 230)">  ast:  0.9ms   trigram: 1.4ms   rank: 0.3ms</text>
+      <text x="14" y="86" fill="oklch(80% 0.01 95)">  hits:</text>
+      <text x="60" y="86" fill="oklch(72% 0.18 145)">src/sh.rs:42  parse_bash</text>
+      <text x="240" y="86" fill="oklch(60% 0.01 95)">score 0.97</text>
+      <text x="14" y="104" fill="oklch(80% 0.01 95)">  hits:</text>
+      <text x="60" y="104" fill="oklch(72% 0.18 145)">src/parse/mod.rs:88  bash::parse</text>
+      <text x="240" y="104" fill="oklch(60% 0.01 95)">score 0.81</text>
+      <text x="14" y="122" fill="oklch(80% 0.01 95)">  hits:</text>
+      <text x="60" y="122" fill="oklch(72% 0.18 145)">tests/sh_test.rs:14  parse_bash_ok</text>
+      <text x="240" y="122" fill="oklch(60% 0.01 95)">score 0.66</text>
+    </g>
+  </g>
+  <text x="32" y="478" class="m" font-size="11" fill="oklch(60% 0.01 95)">APOHARA / codesearch</text>
+</svg>
