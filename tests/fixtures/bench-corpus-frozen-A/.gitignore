@@ -1,0 +1,3 @@
+# The benchmark harness writes its index to a temp dir, never here, but ignore
+# the index dir defensively so a stray run can never commit a database blob.
+.apohara-codesearch/
