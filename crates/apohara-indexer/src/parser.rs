@@ -13,6 +13,7 @@ pub enum Language {
     Java,
     C,
     Ruby,
+    Cpp,
 }
 
 /// Represents an import statement
@@ -207,6 +208,9 @@ pub fn detect_language(path: &Path) -> Option<Language> {
         Some("java") => Some(Language::Java),
         Some("c") | Some("h") => Some(Language::C),
         Some("rb") => Some(Language::Ruby),
+        Some("cpp") | Some("cc") | Some("cxx") | Some("hpp") | Some("hxx") | Some("hh") => {
+            Some(Language::Cpp)
+        }
         _ => None,
     }
 }
@@ -270,6 +274,11 @@ pub fn parse_source(
                 .set_language(&tree_sitter_ruby::LANGUAGE.into())
                 .map_err(|e| ParseError::ParserInit(format!("Ruby: {:?}", e)))?;
         }
+        Language::Cpp => {
+            parser
+                .set_language(&tree_sitter_cpp::LANGUAGE.into())
+                .map_err(|e| ParseError::ParserInit(format!("Cpp: {:?}", e)))?;
+        }
     }
 
     let tree = parser.parse(source, None).ok_or(ParseError::ParseFailed)?;
@@ -286,6 +295,7 @@ pub fn parse_source(
         Language::Java => extract_java_functions(&root, source, &mut signatures),
         Language::C => extract_c_functions(&root, source, &mut signatures),
         Language::Ruby => extract_ruby_functions(&root, source, &mut signatures),
+        Language::Cpp => extract_cpp_functions(&root, source, &mut signatures),
     }
 
     Ok(signatures)
@@ -698,6 +708,11 @@ pub fn parse_source_imports_exports(
                 .set_language(&tree_sitter_ruby::LANGUAGE.into())
                 .map_err(|e| ParseError::ParserInit(format!("Ruby: {:?}", e)))?;
         }
+        Language::Cpp => {
+            parser
+                .set_language(&tree_sitter_cpp::LANGUAGE.into())
+                .map_err(|e| ParseError::ParserInit(format!("Cpp: {:?}", e)))?;
+        }
     }
 
     let tree = parser.parse(source, None).ok_or(ParseError::ParseFailed)?;
@@ -771,6 +786,18 @@ pub fn parse_source_imports_exports(
             // expose their constants/methods; we leave `exports` empty
             // (the type-symbol pass captures classes/modules as Class/Module
             // symbols, which is the Ruby equivalent of "exports").
+        }
+        Language::Cpp => {
+            // C++ imports: `#include` is the same preprocessor directive as
+            // C, with the same node kinds (preproc_include + system_lib_string
+            // or string_literal). The C++ grammar also has additional
+            // #include forms (angle-with-quoted, macro-expanded) that the
+            // tree-sitter-cpp grammar exposes; the simple system + local
+            // distinction covers >90% of real-world C++ headers.
+            extract_cpp_imports(&root, source, &mut imports);
+            // C++ has no module system in the C++03 sense. `export` is a
+            // C++20 module keyword but rarely used in practice; defer it.
+            // Functions are "exported" by being non-static, same as C.
         }
     }
 
@@ -1472,6 +1499,11 @@ pub fn parse_source_spans(
                 .set_language(&tree_sitter_ruby::LANGUAGE.into())
                 .map_err(|e| ParseError::ParserInit(format!("Ruby: {:?}", e)))?;
         }
+        Language::Cpp => {
+            parser
+                .set_language(&tree_sitter_cpp::LANGUAGE.into())
+                .map_err(|e| ParseError::ParserInit(format!("Cpp: {:?}", e)))?;
+        }
     }
 
     let tree = parser.parse(source, None).ok_or(ParseError::ParseFailed)?;
@@ -1488,6 +1520,7 @@ pub fn parse_source_spans(
         Language::Java => extract_java_function_spans(&root, source, &mut spans),
         Language::C => extract_c_function_spans(&root, source, &mut spans),
         Language::Ruby => extract_ruby_function_spans(&root, source, &mut spans),
+        Language::Cpp => extract_cpp_function_spans(&root, source, &mut spans),
     }
 
     Ok(spans)
@@ -2515,18 +2548,25 @@ fn extract_c_functions(node: &Node, source: &str, signatures: &mut Vec<FunctionS
     }
 }
 
-/// Parse a C `function_definition` (the name lives in a `function_declarator`
-/// child as a direct `identifier` child, NOT a field — tree-sitter-c models
-/// `function_declarator` as having `identifier` and `parameter_list` children
-/// without field-name tags). Parameters come from a `parameter_list` child.
+/// Parse a C/C++ `function_definition` (the name lives in a `function_declarator`
+/// child as a direct `identifier` or `field_identifier` child, NOT a field —
+/// tree-sitter-c models `function_declarator` as having `identifier` and
+/// `parameter_list` children without field-name tags; tree-sitter-cpp adds
+/// `field_identifier` for member functions). Parameters come from a
+/// `parameter_list` child.
+///
+/// This function is shared between the C and C++ extractors. C++ member
+/// functions use `field_identifier` (the function name as a class member)
+/// while C free functions use `identifier`. Both are accepted here.
 fn parse_c_function(node: &Node, source: &str) -> Option<FunctionSignature> {
     let declarator = node.child_by_field_name("declarator")?;
-    // The function name is the first `identifier` child of the declarator.
+    // The function name is the first `identifier` OR `field_identifier`
+    // child of the declarator.
     let name = {
         let mut found_name = None;
         let d_cursor = &mut declarator.walk();
         for c in declarator.children(d_cursor) {
-            if c.kind() == "identifier" {
+            if c.kind() == "identifier" || c.kind() == "field_identifier" {
                 if let Ok(t) = c.utf8_text(source.as_bytes()) {
                     found_name = Some(t.to_string());
                     break;
@@ -2827,6 +2867,111 @@ fn extract_ruby_imports(node: &Node, source: &str, imports: &mut Vec<ImportState
     for child in node.children(cursor) {
         extract_ruby_imports(&child, source, imports);
     }
+}
+
+// ============================================================================
+// C++ extraction
+// ============================================================================
+
+/// C++ shares `function_definition` and `preproc_include` with C (tree-sitter-cpp
+/// is a strict superset of tree-sitter-c at the relevant nodes). We re-use the
+/// C extractor for those surface nodes and only ADD the C++-specific node
+/// kinds (`class_specifier`, `struct_specifier`, `namespace_definition`) as
+/// additional type symbols.
+///
+/// C++ also has additional quirks we deliberately defer:
+///   - templates (template <typename T> ...): we capture the OUTER name only,
+///     not the template parameter list. Same as the Go/Python extractor
+///     "exotic detail" precedent (R-4 in the plan).
+///   - operator overloads (operator+, operator<<): captured as Function
+///     symbols with the operator symbol as the name (matches what a
+///     human would search for).
+///   - member access (`->`, `.`): ignored (not top-level symbols).
+///
+/// Per the v0.3.0 plan, this is the KOTLIN-CPP story's C++ side; Kotlin is
+/// deferred because tree-sitter-kotlin has no 0.23.x line on crates.io
+/// (only 0.2.x and 0.3.x majors), violating the workspace's tree-sitter
+/// version pin policy. Documented in the F1-KOTLIN-CPP commit message.
+fn extract_cpp_functions(node: &Node, source: &str, signatures: &mut Vec<FunctionSignature>) {
+    let cursor = &mut node.walk();
+
+    for child in node.children(cursor) {
+        match child.kind() {
+            "function_definition" => {
+                if let Some(sig) = parse_c_function(&child, source) {
+                    signatures.push(sig);
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_cpp_functions(&body, source, signatures);
+                }
+            }
+            "class_specifier" | "struct_specifier" => {
+                // C++ class / struct: emit the type symbol AND descend into
+                // its body for member functions. The C grammar has no
+                // class_specifier at the top level (only struct_type as a
+                // field type), so this branch is C++-only.
+                if let Some(sig) = type_symbol(&child, source) {
+                    signatures.push(sig);
+                }
+                // Descend into field_declaration_list (the C++ class body)
+                // and re-run the extractor so member function_definitions
+                // are picked up.
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_cpp_functions(&body, source, signatures);
+                }
+            }
+            _ => {
+                extract_cpp_functions(&child, source, signatures);
+            }
+        }
+    }
+}
+
+/// Extract spans of C++ function definitions + class/struct type symbols.
+fn extract_cpp_function_spans(
+    node: &Node,
+    source: &str,
+    spans: &mut Vec<(FunctionSignature, SymbolKind, usize, usize)>,
+) {
+    let cursor = &mut node.walk();
+
+    for child in node.children(cursor) {
+        match child.kind() {
+            "function_definition" => {
+                if let Some(sig) = parse_c_function(&child, source) {
+                    spans.push(span_of(&child, sig, SymbolKind::Function));
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_cpp_function_spans(&body, source, spans);
+                }
+            }
+            "class_specifier" => {
+                if let Some(sig) = type_symbol(&child, source) {
+                    spans.push(span_of(&child, sig, SymbolKind::Class));
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_cpp_function_spans(&body, source, spans);
+                }
+            }
+            "struct_specifier" => {
+                if let Some(sig) = type_symbol(&child, source) {
+                    spans.push(span_of(&child, sig, SymbolKind::Struct));
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_cpp_function_spans(&body, source, spans);
+                }
+            }
+            _ => {
+                extract_cpp_function_spans(&child, source, spans);
+            }
+        }
+    }
+}
+
+/// Extract C++ `#include` directives. Re-uses the C extractor verbatim —
+/// the C++ grammar's preproc_include node shape is identical.
+fn extract_cpp_imports(node: &Node, source: &str, imports: &mut Vec<ImportStatement>) {
+    extract_c_imports(node, source, imports);
 }
 
 /// Classify a Go `type_spec` by its underlying type child: a `struct_type` child
@@ -3842,16 +3987,14 @@ import static java.util.Collections.emptyList;
 
     #[test]
     fn test_detect_language_c() {
-        // .c and .h both map to C. C++ is intentionally NOT mapped here —
-        // that's F1-KOTLIN-CPP's concern (.cpp/.hpp/.cc/.cxx) and uses the
-        // tree-sitter-cpp grammar. Mixing C and C++ under the same Language
-        // variant would surface C++ syntax errors with the C grammar.
+        // .c and .h both map to C. C++ extensions are handled separately
+        // by Language::Cpp (see test_detect_language_cpp).
         assert_eq!(detect_language(Path::new("foo.c")), Some(Language::C));
         assert_eq!(detect_language(Path::new("foo.h")), Some(Language::C));
-        // C++ extensions must NOT match (deferred to the F1-KOTLIN-CPP story).
-        assert_eq!(detect_language(Path::new("foo.cpp")), None);
-        assert_eq!(detect_language(Path::new("foo.hpp")), None);
-        assert_eq!(detect_language(Path::new("foo.cc")), None);
+        // C++ extensions are no longer None — they're Language::Cpp.
+        assert_eq!(detect_language(Path::new("foo.cpp")), Some(Language::Cpp));
+        assert_eq!(detect_language(Path::new("foo.hpp")), Some(Language::Cpp));
+        assert_eq!(detect_language(Path::new("foo.cc")), Some(Language::Cpp));
     }
 
     #[test]
@@ -3998,5 +4141,85 @@ require_relative "./config"
             .count();
         // 4 methods: initialize, greet, add, top_level_helper.
         assert_eq!(method_count, 4, "got method names: {:?}", names);
+    }
+
+    #[test]
+    fn test_detect_language_cpp() {
+        // Standard C++ extensions: .cpp, .cc, .cxx, .hpp, .hxx, .hh.
+        // C extensions (.c, .h) intentionally stay on Language::C — the
+        // C and C++ grammars are distinct; a .c file is more likely plain
+        // C than C++ (the inverse is rarer). A header-only C++ project
+        // using .h files would need a rename to .hpp to be parsed.
+        assert_eq!(detect_language(Path::new("foo.cpp")), Some(Language::Cpp));
+        assert_eq!(detect_language(Path::new("foo.cc")), Some(Language::Cpp));
+        assert_eq!(detect_language(Path::new("foo.cxx")), Some(Language::Cpp));
+        assert_eq!(detect_language(Path::new("foo.hpp")), Some(Language::Cpp));
+        assert_eq!(detect_language(Path::new("foo.hxx")), Some(Language::Cpp));
+        assert_eq!(detect_language(Path::new("foo.hh")), Some(Language::Cpp));
+        // C extensions stay on Language::C (per the precedent set in
+        // test_detect_language_c).
+        assert_eq!(detect_language(Path::new("foo.c")), Some(Language::C));
+        assert_eq!(detect_language(Path::new("foo.h")), Some(Language::C));
+    }
+
+    #[test]
+    fn test_parse_cpp_function_spans() {
+        // A class, a struct, and a free function. Mirrors test_parse_c_function_spans
+        // but adds the class_specifier/struct_specifier C++-only surface.
+        let source = r#"class Greeter {
+public:
+    void greet(const std::string& name) {}
+};
+
+struct Point {
+    int x;
+    int y;
+};
+
+int add(int a, int b) {
+    return a + b;
+}
+"#;
+
+        let spans = parse_source_spans(source, Language::Cpp).unwrap();
+        let names: Vec<_> = spans.iter().map(|(s, _, _, _)| s.name.as_str()).collect();
+        assert!(names.contains(&"greet"));
+        assert!(names.contains(&"add"));
+
+        // Class + struct are C++-only.
+        let has_kind = |name: &str, k: SymbolKind| -> bool {
+            spans.iter().any(|(s, kk, _, _)| s.name == name && *kk == k)
+        };
+        assert!(has_kind("Greeter", SymbolKind::Class));
+        assert!(has_kind("Point", SymbolKind::Struct));
+    }
+
+    #[test]
+    fn test_parse_cpp_imports() {
+        // Same shape as C imports.
+        let source = r#"#include <iostream>
+#include <vector>
+#include "config.h"
+"#;
+
+        let (imports, _exports) = parse_source_imports_exports(source, Language::Cpp).unwrap();
+        let import_sources: Vec<_> = imports.iter().map(|i| i.source.as_str()).collect();
+        assert!(import_sources.contains(&"<iostream>"));
+        assert!(import_sources.contains(&"<vector>"));
+        assert!(import_sources.contains(&"\"config.h\""));
+    }
+
+    #[test]
+    fn test_parse_file_cpp_fixture() {
+        let path = std::path::Path::new("tests/fixtures/fixture.cpp");
+        let source = std::fs::read_to_string(path).expect("read fixture.cpp");
+        let spans = parse_source_spans(&source, Language::Cpp).unwrap();
+        let names: Vec<_> = spans.iter().map(|(s, _, _, _)| s.name.as_str()).collect();
+        // Class + struct + free functions.
+        assert!(names.contains(&"Greeter"));
+        assert!(names.contains(&"Point"));
+        assert!(names.contains(&"greet"));
+        assert!(names.contains(&"add"));
+        assert!(names.contains(&"main"));
     }
 }

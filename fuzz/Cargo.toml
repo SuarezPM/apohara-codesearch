@@ -73,6 +73,18 @@ test = false
 doc = false
 bench = false
 
+# C++-specific fuzz target. Covers function_definition (free + member,
+# via class_specifier / struct_specifier descent) + preproc_include
+# extraction. C and C++ share the function_definition + preproc_include
+# node shapes; C++ adds class_specifier / struct_specifier for member
+# functions and field_identifier for the member function name.
+[[bin]]
+name = "parse_cpp_source"
+path = "fuzz_targets/parse_cpp_source.rs"
+test = false
+doc = false
+bench = false
+
 # Empty workspace table: decouples this crate from the parent workspace so the
 # parent's `cargo build`/clippy/test never tries to build the fuzzers.
 [workspace]
