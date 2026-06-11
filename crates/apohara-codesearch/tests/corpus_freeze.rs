@@ -15,16 +15,18 @@
 use std::path::Path;
 
 const CORPUS_A_PATH: &str = "tests/fixtures/bench-corpus-frozen-A";
-const CORPUS_A_EXPECTED_HASH: &str = "d045e86ca978935f1a292b631941b8bde3d3341f49179a94fdfbebb1a2890b29";
+const CORPUS_A_EXPECTED_HASH: &str =
+    "d045e86ca978935f1a292b631941b8bde3d3341f49179a94fdfbebb1a2890b29";
 
 const CORPUS_B_PATH: &str = "tests/fixtures/bench-corpus-frozen-B/queries.json";
-const CORPUS_B_EXPECTED_HASH: &str = "f5da3d598daee07528676a4ab528db7a70c15a7bd37d245da443857c55338ab2";
+const CORPUS_B_EXPECTED_HASH: &str =
+    "f5da3d598daee07528676a4ab528db7a70c15a7bd37d245da443857c55338ab2";
 
 /// Compute a content-hash for a directory: sha256 of (sorted, sha256-per-file).
 /// Equivalent to `find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum`.
 fn dir_content_hash(root: &Path) -> String {
-    use std::collections::BTreeMap;
     use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
     let mut files: BTreeMap<String, String> = BTreeMap::new();
     collect_files(root, root, &mut files);
     let mut combined = String::new();
@@ -38,7 +40,9 @@ fn dir_content_hash(root: &Path) -> String {
 
 fn collect_files(root: &Path, dir: &Path, out: &mut std::collections::BTreeMap<String, String>) {
     use sha2::{Digest, Sha256};
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
