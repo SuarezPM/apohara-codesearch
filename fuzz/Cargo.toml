@@ -63,6 +63,16 @@ test = false
 doc = false
 bench = false
 
+# Ruby-specific fuzz target. Covers class/module/method/singleton_method
+# extraction. Critical regression target for the R-1.3 anti-gotcha
+# (do_block / block must NOT be emitted as top-level methods).
+[[bin]]
+name = "parse_ruby_source"
+path = "fuzz_targets/parse_ruby_source.rs"
+test = false
+doc = false
+bench = false
+
 # Empty workspace table: decouples this crate from the parent workspace so the
 # parent's `cargo build`/clippy/test never tries to build the fuzzers.
 [workspace]
