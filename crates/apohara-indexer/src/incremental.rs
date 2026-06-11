@@ -445,6 +445,7 @@ fn language_tag(language: &Option<Language>) -> Option<&'static str> {
         Language::Go => "go",
         Language::Bash => "bash",
         Language::Java => "java",
+        Language::C => "c",
     })
 }
 

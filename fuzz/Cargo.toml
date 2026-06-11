@@ -53,6 +53,16 @@ test = false
 doc = false
 bench = false
 
+# C-specific fuzz target. Covers function_definition + preproc_include
+# extraction on adversarial input. C++ uses tree-sitter-cpp and is a
+# separate target in F1-KOTLIN-CPP.
+[[bin]]
+name = "parse_c_source"
+path = "fuzz_targets/parse_c_source.rs"
+test = false
+doc = false
+bench = false
+
 # Empty workspace table: decouples this crate from the parent workspace so the
 # parent's `cargo build`/clippy/test never tries to build the fuzzers.
 [workspace]
