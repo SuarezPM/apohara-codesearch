@@ -34,6 +34,16 @@ test = false
 doc = false
 bench = false
 
+# Bash-specific fuzz target. Exercises the four public entry points on
+# untrusted input so error-recovery (ERROR nodes, missing fields) is fuzzed
+# independently of the bundled parse_source target.
+[[bin]]
+name = "parse_bash_source"
+path = "fuzz_targets/parse_bash_source.rs"
+test = false
+doc = false
+bench = false
+
 # Empty workspace table: decouples this crate from the parent workspace so the
 # parent's `cargo build`/clippy/test never tries to build the fuzzers.
 [workspace]
