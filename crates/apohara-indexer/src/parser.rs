@@ -12,6 +12,7 @@ pub enum Language {
     Bash,
     Java,
     C,
+    Ruby,
 }
 
 /// Represents an import statement
@@ -132,6 +133,8 @@ pub enum SymbolKind {
     /// Rust `type_item`, TS `type_alias_declaration`, Go non-struct/-interface
     /// `type_spec`.
     Type,
+    /// Ruby `module` declaration.
+    Module,
 }
 
 impl SymbolKind {
@@ -147,6 +150,7 @@ impl SymbolKind {
             SymbolKind::Class => "class",
             SymbolKind::Interface => "interface",
             SymbolKind::Type => "type",
+            SymbolKind::Module => "module",
         }
     }
 }
@@ -202,6 +206,7 @@ pub fn detect_language(path: &Path) -> Option<Language> {
         Some("bash") | Some("sh") => Some(Language::Bash),
         Some("java") => Some(Language::Java),
         Some("c") | Some("h") => Some(Language::C),
+        Some("rb") => Some(Language::Ruby),
         _ => None,
     }
 }
@@ -260,6 +265,11 @@ pub fn parse_source(
                 .set_language(&tree_sitter_c::LANGUAGE.into())
                 .map_err(|e| ParseError::ParserInit(format!("C: {:?}", e)))?;
         }
+        Language::Ruby => {
+            parser
+                .set_language(&tree_sitter_ruby::LANGUAGE.into())
+                .map_err(|e| ParseError::ParserInit(format!("Ruby: {:?}", e)))?;
+        }
     }
 
     let tree = parser.parse(source, None).ok_or(ParseError::ParseFailed)?;
@@ -275,6 +285,7 @@ pub fn parse_source(
         Language::Bash => extract_bash_functions(&root, source, &mut signatures),
         Language::Java => extract_java_functions(&root, source, &mut signatures),
         Language::C => extract_c_functions(&root, source, &mut signatures),
+        Language::Ruby => extract_ruby_functions(&root, source, &mut signatures),
     }
 
     Ok(signatures)
@@ -682,6 +693,11 @@ pub fn parse_source_imports_exports(
                 .set_language(&tree_sitter_c::LANGUAGE.into())
                 .map_err(|e| ParseError::ParserInit(format!("C: {:?}", e)))?;
         }
+        Language::Ruby => {
+            parser
+                .set_language(&tree_sitter_ruby::LANGUAGE.into())
+                .map_err(|e| ParseError::ParserInit(format!("Ruby: {:?}", e)))?;
+        }
     }
 
     let tree = parser.parse(source, None).ok_or(ParseError::ParseFailed)?;
@@ -745,6 +761,16 @@ pub fn parse_source_imports_exports(
             // every top-level declaration to classify its storage class —
             // outside the import/span scope of this pass. We leave `exports`
             // empty (mirrors the Go precedent).
+        }
+        Language::Ruby => {
+            // Ruby imports: `require` and `require_relative` are top-level
+            // `call` nodes with the method name as the first `identifier`
+            // child. The argument is the string/path. Captured as Require.
+            extract_ruby_imports(&root, source, &mut imports);
+            // Ruby has no export keyword. Top-level `module` declarations
+            // expose their constants/methods; we leave `exports` empty
+            // (the type-symbol pass captures classes/modules as Class/Module
+            // symbols, which is the Ruby equivalent of "exports").
         }
     }
 
@@ -1441,6 +1467,11 @@ pub fn parse_source_spans(
                 .set_language(&tree_sitter_c::LANGUAGE.into())
                 .map_err(|e| ParseError::ParserInit(format!("C: {:?}", e)))?;
         }
+        Language::Ruby => {
+            parser
+                .set_language(&tree_sitter_ruby::LANGUAGE.into())
+                .map_err(|e| ParseError::ParserInit(format!("Ruby: {:?}", e)))?;
+        }
     }
 
     let tree = parser.parse(source, None).ok_or(ParseError::ParseFailed)?;
@@ -1456,6 +1487,7 @@ pub fn parse_source_spans(
         Language::Bash => extract_bash_function_spans(&root, source, &mut spans),
         Language::Java => extract_java_function_spans(&root, source, &mut spans),
         Language::C => extract_c_function_spans(&root, source, &mut spans),
+        Language::Ruby => extract_ruby_function_spans(&root, source, &mut spans),
     }
 
     Ok(spans)
@@ -2591,6 +2623,212 @@ fn extract_c_imports(node: &Node, source: &str, imports: &mut Vec<ImportStatemen
     }
 }
 
+// ============================================================================
+// Ruby extraction
+// ============================================================================
+
+/// Extract method signatures from Ruby source.
+///
+/// Mirrors the Python extractor: a recursive child walk where `method` is the
+/// unit, and `class` / `module` declarations are descended into to reach
+/// their methods. Class and module are also emitted as type symbols so the
+/// chunker indexes their kind.
+///
+/// KEY QUIRK (per R-1.3 in the plan): the recursion DESCENDS into
+/// `body_statement` (the class/module body) but does NOT descend into
+/// `do_block` or `block` (lambda / proc / do-end blocks inside a method).
+/// The `def` exterior only — inner blocks are part of the enclosing method
+/// and should not be emitted as separate top-level method symbols.
+fn extract_ruby_functions(node: &Node, source: &str, signatures: &mut Vec<FunctionSignature>) {
+    let cursor = &mut node.walk();
+
+    for child in node.children(cursor) {
+        match child.kind() {
+            "class" | "module" => {
+                if let Some(sig) = type_symbol(&child, source) {
+                    signatures.push(sig);
+                }
+                // Descend only into the body_statement, NOT into method bodies.
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_ruby_functions(&body, source, signatures);
+                }
+            }
+            "method" | "singleton_method" => {
+                if let Some(sig) = parse_ruby_method(&child, source) {
+                    signatures.push(sig);
+                }
+                // Do NOT recurse into the method body — its do_block / block
+                // children are implementation detail, not top-level methods.
+            }
+            _ => {
+                extract_ruby_functions(&child, source, signatures);
+            }
+        }
+    }
+}
+
+/// Parse a Ruby `method` node (field `name: identifier`, parameters in
+/// `method_parameters`/`parameters` child).
+fn parse_ruby_method(node: &Node, source: &str) -> Option<FunctionSignature> {
+    let name = node
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+        .map(|s| s.to_string())?;
+
+    let start_position = node.start_position();
+    let mut sig =
+        FunctionSignature::new(name).with_position(start_position.row + 1, start_position.column);
+    // The parameters live in either `method_parameters` or `parameters` child.
+    let params = node
+        .child_by_field_name("parameters")
+        .or_else(|| node.child_by_field_name("method_parameters"));
+    if let Some(params) = params {
+        // Collect parameter names eagerly into a Vec<String> to avoid
+        // lifetime issues with `param.walk()` cursors that don't outlive the
+        // params iteration. Ruby's grammar keeps parameter naming shallow
+        // (an `identifier` child carries the name directly), so we just
+        // walk the children and read the first `identifier` text per param.
+        let param_texts: Vec<String> = {
+            let mut names = Vec::new();
+            let mut p_cursor = params.walk();
+            for param in params.children(&mut p_cursor) {
+                let k = param.kind();
+                if k == "identifier" {
+                    if let Ok(t) = param.utf8_text(source.as_bytes()) {
+                        names.push(t.to_string());
+                    }
+                } else if k == "optional_parameter"
+                    || k == "splat_parameter"
+                    || k == "keyword_parameter"
+                    || k == "block_parameter"
+                    || k == "hash_keyword_parameter"
+                {
+                    // field "name" first; else the first identifier child.
+                    if let Some(name_node) = param.child_by_field_name("name") {
+                        if let Ok(t) = name_node.utf8_text(source.as_bytes()) {
+                            names.push(t.to_string());
+                        }
+                    } else {
+                        // Walk children, holding the cursor in a binding that
+                        // outlives the per-child iteration via an explicit
+                        // collect.
+                        let mut inner = param.walk();
+                        let children: Vec<_> = param
+                            .children(&mut inner)
+                            .filter(|c| c.kind() == "identifier")
+                            .collect();
+                        if let Some(c) = children.first() {
+                            if let Ok(t) = c.utf8_text(source.as_bytes()) {
+                                names.push(t.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            names
+        };
+        for name in param_texts {
+            sig.parameters.push(Parameter {
+                name,
+                type_annotation: None, // Ruby is dynamically typed.
+            });
+        }
+    }
+    Some(sig)
+}
+
+/// Extract spans of Ruby methods + class/module type symbols.
+fn extract_ruby_function_spans(
+    node: &Node,
+    source: &str,
+    spans: &mut Vec<(FunctionSignature, SymbolKind, usize, usize)>,
+) {
+    let cursor = &mut node.walk();
+
+    for child in node.children(cursor) {
+        match child.kind() {
+            "class" => {
+                if let Some(sig) = type_symbol(&child, source) {
+                    spans.push(span_of(&child, sig, SymbolKind::Class));
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_ruby_function_spans(&body, source, spans);
+                }
+            }
+            "module" => {
+                if let Some(sig) = type_symbol(&child, source) {
+                    spans.push(span_of(&child, sig, SymbolKind::Module));
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_ruby_function_spans(&body, source, spans);
+                }
+            }
+            "method" => {
+                if let Some(sig) = parse_ruby_method(&child, source) {
+                    spans.push(span_of(&child, sig, SymbolKind::Function));
+                }
+                // No descent into method body.
+            }
+            "singleton_method" => {
+                if let Some(sig) = parse_ruby_method(&child, source) {
+                    spans.push(span_of(&child, sig, SymbolKind::Function));
+                }
+                // No descent into method body.
+            }
+            _ => {
+                extract_ruby_function_spans(&child, source, spans);
+            }
+        }
+    }
+}
+
+/// Extract Ruby `require` and `require_relative` calls as Require-kind imports.
+fn extract_ruby_imports(node: &Node, source: &str, imports: &mut Vec<ImportStatement>) {
+    if node.kind() == "call" {
+        // The first child is typically the method name (`identifier`).
+        let cursor = &mut node.walk();
+        let mut method_name = "";
+        let mut arg_text: Option<String> = None;
+        let mut first_identifier_seen = false;
+        for child in node.children(cursor) {
+            if !first_identifier_seen && child.kind() == "identifier" {
+                method_name = child.utf8_text(source.as_bytes()).unwrap_or("");
+                first_identifier_seen = true;
+            } else if first_identifier_seen && child.kind() == "argument_list" {
+                // First string child of the argument list is the path.
+                let a_cursor = &mut child.walk();
+                for arg in child.children(a_cursor) {
+                    if arg.kind() == "string" {
+                        if let Ok(t) = arg.utf8_text(source.as_bytes()) {
+                            // Strip the surrounding quotes.
+                            let stripped = t
+                                .trim_start_matches(['\'', '"'])
+                                .trim_end_matches(['\'', '"'])
+                                .to_string();
+                            arg_text = Some(stripped);
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        if method_name == "require" || method_name == "require_relative" {
+            if let Some(arg) = arg_text {
+                let line = node.start_position().row + 1;
+                imports.push(
+                    ImportStatement::new(arg.clone(), ImportKind::Require(arg)).with_line(line),
+                );
+            }
+        }
+    }
+
+    let cursor = &mut node.walk();
+    for child in node.children(cursor) {
+        extract_ruby_imports(&child, source, imports);
+    }
+}
+
 /// Classify a Go `type_spec` by its underlying type child: a `struct_type` child
 /// → `Struct`, an `interface_type` child → `Interface`, anything else (named
 /// type, alias, function type, etc.) → `Type`.
@@ -3672,5 +3910,93 @@ int main(int argc, char **argv) {
         assert!(names.contains(&"add"));
         assert!(names.contains(&"main"));
         assert!(names.contains(&"unused_helper"));
+    }
+
+    #[test]
+    fn test_detect_language_ruby() {
+        assert_eq!(detect_language(Path::new("foo.rb")), Some(Language::Ruby));
+        // ERB and gemspec are also Ruby; we don't try to be exhaustive here.
+        assert_eq!(detect_language(Path::new("foo.erb")), None);
+        assert_eq!(detect_language(Path::new("foo.ruby")), None);
+    }
+
+    #[test]
+    fn test_parse_ruby_function_spans() {
+        // Critical: a method with a do_block inside must emit ONE method
+        // symbol (greet), not three (greet + the block's implicit do).
+        // This is the R-1.3 anti-gotcha from the v0.3.0 plan.
+        let source = r#"class Greeter
+  def initialize(name)
+    @name = name
+  end
+
+  def greet
+    [1, 2, 3].each do |n|
+      puts n
+    end
+  end
+end
+
+def top_level
+  42
+end
+"#;
+
+        let spans = parse_source_spans(source, Language::Ruby).unwrap();
+        let method_names: Vec<_> = spans
+            .iter()
+            .filter(|(_, k, _, _)| *k == SymbolKind::Function)
+            .map(|(s, _, _, _)| s.name.as_str())
+            .collect();
+        // Exactly the two defs, NOT the do-block.
+        assert_eq!(method_names.len(), 3, "got methods: {:?}", method_names);
+        assert!(method_names.contains(&"initialize"));
+        assert!(method_names.contains(&"greet"));
+        assert!(method_names.contains(&"top_level"));
+
+        // The class itself is a Class symbol.
+        let has_kind = |name: &str, k: SymbolKind| -> bool {
+            spans.iter().any(|(s, kk, _, _)| s.name == name && *kk == k)
+        };
+        assert!(has_kind("Greeter", SymbolKind::Class));
+    }
+
+    #[test]
+    fn test_parse_ruby_imports() {
+        let source = r#"require "json"
+require "yaml"
+require_relative "./config"
+"#;
+
+        let (imports, _exports) = parse_source_imports_exports(source, Language::Ruby).unwrap();
+
+        let import_sources: Vec<_> = imports.iter().map(|i| i.source.as_str()).collect();
+        assert!(import_sources.contains(&"json"));
+        assert!(import_sources.contains(&"yaml"));
+        assert!(import_sources.contains(&"./config"));
+    }
+
+    #[test]
+    fn test_parse_file_ruby_fixture() {
+        let path = std::path::Path::new("tests/fixtures/fixture.rb");
+        let source = std::fs::read_to_string(path).expect("read fixture.rb");
+        let spans = parse_source_spans(&source, Language::Ruby).unwrap();
+        let names: Vec<_> = spans.iter().map(|(s, _, _, _)| s.name.as_str()).collect();
+        // class, module, methods (initialize, greet, add, top_level_helper).
+        assert!(names.contains(&"Greeter"));
+        assert!(names.contains(&"Util"));
+        assert!(names.contains(&"initialize"));
+        assert!(names.contains(&"greet"));
+        assert!(names.contains(&"add"));
+        assert!(names.contains(&"top_level_helper"));
+        // R-1.3: the do_block must NOT appear as a top-level method.
+        // (The do_block has no `def` so it wouldn't anyway, but the test
+        // is the regression guard.)
+        let method_count = spans
+            .iter()
+            .filter(|(_, k, _, _)| *k == SymbolKind::Function)
+            .count();
+        // 4 methods: initialize, greet, add, top_level_helper.
+        assert_eq!(method_count, 4, "got method names: {:?}", names);
     }
 }
