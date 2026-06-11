@@ -9,6 +9,7 @@ pub enum Language {
     Rust,
     Python,
     Go,
+    Bash,
 }
 
 /// Represents an import statement
@@ -196,6 +197,7 @@ pub fn detect_language(path: &Path) -> Option<Language> {
         Some("rs") => Some(Language::Rust),
         Some("py") => Some(Language::Python),
         Some("go") => Some(Language::Go),
+        Some("bash") | Some("sh") => Some(Language::Bash),
         _ => None,
     }
 }
@@ -239,6 +241,11 @@ pub fn parse_source(
                 .set_language(&tree_sitter_go::LANGUAGE.into())
                 .map_err(|e| ParseError::ParserInit(format!("Go: {:?}", e)))?;
         }
+        Language::Bash => {
+            parser
+                .set_language(&tree_sitter_bash::LANGUAGE.into())
+                .map_err(|e| ParseError::ParserInit(format!("Bash: {:?}", e)))?;
+        }
     }
 
     let tree = parser.parse(source, None).ok_or(ParseError::ParseFailed)?;
@@ -251,6 +258,7 @@ pub fn parse_source(
         Language::Rust => extract_rust_functions(&root, source, &mut signatures),
         Language::Python => extract_python_functions(&root, source, &mut signatures),
         Language::Go => extract_go_functions(&root, source, &mut signatures),
+        Language::Bash => extract_bash_functions(&root, source, &mut signatures),
     }
 
     Ok(signatures)
@@ -643,6 +651,11 @@ pub fn parse_source_imports_exports(
                 .set_language(&tree_sitter_go::LANGUAGE.into())
                 .map_err(|e| ParseError::ParserInit(format!("Go: {:?}", e)))?;
         }
+        Language::Bash => {
+            parser
+                .set_language(&tree_sitter_bash::LANGUAGE.into())
+                .map_err(|e| ParseError::ParserInit(format!("Bash: {:?}", e)))?;
+        }
     }
 
     let tree = parser.parse(source, None).ok_or(ParseError::ParseFailed)?;
@@ -674,6 +687,15 @@ pub fn parse_source_imports_exports(
             // case — outside the import/span scope of this pass — so it is
             // deferred: Go's "exported = capitalized identifier" rule is not
             // modeled here.
+        }
+        Language::Bash => {
+            // Bash "imports" = `source` and `.` builtins (load a file into the
+            // current shell). They appear as `command` nodes with name "source"
+            // or ".". Captured as Require-kind imports.
+            extract_bash_imports(&root, source, &mut imports);
+            // Bash "exports" = the `export` builtin (mark a variable for the
+            // environment). Captured as export rows.
+            extract_bash_exports(&root, source, &mut exports);
         }
     }
 
@@ -1355,6 +1377,11 @@ pub fn parse_source_spans(
                 .set_language(&tree_sitter_go::LANGUAGE.into())
                 .map_err(|e| ParseError::ParserInit(format!("Go: {:?}", e)))?;
         }
+        Language::Bash => {
+            parser
+                .set_language(&tree_sitter_bash::LANGUAGE.into())
+                .map_err(|e| ParseError::ParserInit(format!("Bash: {:?}", e)))?;
+        }
     }
 
     let tree = parser.parse(source, None).ok_or(ParseError::ParseFailed)?;
@@ -1367,6 +1394,7 @@ pub fn parse_source_spans(
         Language::Rust => extract_rust_function_spans(&root, source, &mut spans),
         Language::Python => extract_python_function_spans(&root, source, &mut spans),
         Language::Go => extract_go_function_spans(&root, source, &mut spans),
+        Language::Bash => extract_bash_function_spans(&root, source, &mut spans),
     }
 
     Ok(spans)
@@ -2029,6 +2057,176 @@ fn extract_go_function_spans(
                 extract_go_function_spans(&child, source, spans);
             }
         }
+    }
+}
+
+// ============================================================================
+// Bash extraction
+// ============================================================================
+
+/// Extract function signatures from Bash source.
+///
+/// Mirrors the Python extractor: a recursive child walk where `function_definition`
+/// is the unit of extraction. Bash has no methods, classes, or types — only
+/// functions — so the surface here is intentionally smaller than the Python/Go
+/// extractors.
+fn extract_bash_functions(node: &Node, source: &str, signatures: &mut Vec<FunctionSignature>) {
+    let cursor = &mut node.walk();
+
+    for child in node.children(cursor) {
+        match child.kind() {
+            "function_definition" => {
+                if let Some(sig) = parse_bash_function(&child, source) {
+                    signatures.push(sig);
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_bash_functions(&body, source, signatures);
+                }
+            }
+            _ => {
+                extract_bash_functions(&child, source, signatures);
+            }
+        }
+    }
+}
+
+/// Parse a Bash `function_definition` (field `name: word`).
+/// The signature is just the function name — no parameters surface in the
+/// grammar (Bash functions are positionally bound, not typed).
+fn parse_bash_function(node: &Node, source: &str) -> Option<FunctionSignature> {
+    let name = node
+        .child_by_field_name("name")
+        .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+        .map(|s| s.to_string())?;
+
+    let start_position = node.start_position();
+    let sig =
+        FunctionSignature::new(name).with_position(start_position.row + 1, start_position.column);
+    Some(sig)
+}
+
+/// Extract spans of Bash function definitions. Mirrors `extract_python_function_spans`.
+fn extract_bash_function_spans(
+    node: &Node,
+    source: &str,
+    spans: &mut Vec<(FunctionSignature, SymbolKind, usize, usize)>,
+) {
+    let cursor = &mut node.walk();
+
+    for child in node.children(cursor) {
+        match child.kind() {
+            "function_definition" => {
+                if let Some(sig) = parse_bash_function(&child, source) {
+                    spans.push(span_of(&child, sig, SymbolKind::Function));
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_bash_function_spans(&body, source, spans);
+                }
+            }
+            _ => {
+                extract_bash_function_spans(&child, source, spans);
+            }
+        }
+    }
+}
+
+/// Extract Bash `source` and `.` builtins as Require-kind imports.
+///
+/// tree-sitter-bash models these as a `command` node whose children are:
+///   - `command_name` (a `word` containing the literal "source" or ".")
+///   - then one or more `word` siblings that are the positional arguments
+///   - and possibly `string` nodes for double-quoted args
+///
+/// We collect the first sibling `word`/`string`/`raw_string`/`concatenation`
+/// after the `command_name` as the import source.
+fn extract_bash_imports(node: &Node, source: &str, imports: &mut Vec<ImportStatement>) {
+    if node.kind() == "command" {
+        // Find the command_name child to learn the verb.
+        let mut verb = "";
+        let cursor = &mut node.walk();
+        for child in node.children(cursor) {
+            if child.kind() == "command_name" {
+                verb = child.utf8_text(source.as_bytes()).unwrap_or("");
+                break;
+            }
+        }
+        if verb == "source" || verb == "." {
+            // Walk children again; the first `word`, `string`, `raw_string`, or
+            // `concatenation` AFTER the command_name is the path argument.
+            let mut past_name = false;
+            let cursor = &mut node.walk();
+            for child in node.children(cursor) {
+                if child.kind() == "command_name" {
+                    past_name = true;
+                    continue;
+                }
+                if !past_name {
+                    continue;
+                }
+                let k = child.kind();
+                if k == "word" || k == "string" || k == "raw_string" || k == "concatenation" {
+                    if let Ok(text) = child.utf8_text(source.as_bytes()) {
+                        let line = node.start_position().row + 1;
+                        imports.push(
+                            ImportStatement::new(
+                                text.to_string(),
+                                ImportKind::Require(text.to_string()),
+                            )
+                            .with_line(line),
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let cursor = &mut node.walk();
+    for child in node.children(cursor) {
+        extract_bash_imports(&child, source, imports);
+    }
+}
+
+/// Extract Bash `export` and `declare -x` declarations as export rows.
+///
+/// tree-sitter-bash models BOTH `export FOO=bar` AND `declare -x FOO=bar` as
+/// `declaration_command` nodes (not `command` nodes). Inside:
+///   - `export` or `declare` keyword node
+///   - then one or more `variable_name` siblings (for `export FOO` without value)
+///   - or one or more `variable_assignment` children (for `export FOO=bar` /
+///     `declare -x FOO=bar`); each carries a `variable_name` child with field
+///     name `name`.
+fn extract_bash_exports(node: &Node, source: &str, exports: &mut Vec<ExportStatement>) {
+    if node.kind() == "declaration_command" {
+        let line = node.start_position().row + 1;
+        // Two cases to handle: a `variable_name` sibling directly, or a
+        // `variable_assignment` whose field `name` is the variable.
+        let cursor = &mut node.walk();
+        for child in node.children(cursor) {
+            let k = child.kind();
+            if k == "variable_name" {
+                if let Ok(name) = child.utf8_text(source.as_bytes()) {
+                    exports.push(
+                        ExportStatement::new(ExportKind::Named(vec![name.to_string()]))
+                            .with_line(line),
+                    );
+                }
+            } else if k == "variable_assignment" {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
+                        exports.push(
+                            ExportStatement::new(ExportKind::Named(vec![name.to_string()]))
+                                .with_line(line),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let cursor = &mut node.walk();
+    for child in node.children(cursor) {
+        extract_bash_exports(&child, source, exports);
     }
 }
 
@@ -2837,5 +3035,119 @@ type MyInt int
         assert_eq!(x_k, SymbolKind::Function);
         // Same single line as the trait — the collision the chunker must dedup.
         assert_eq!((x_s, x_e), (1, 1));
+    }
+
+    #[test]
+    fn test_detect_language_bash() {
+        // .bash and .sh both map to Bash. Existing languages must remain
+        // unaffected (regression guard for the additive change to detect_language).
+        // Note: we match lowercase only — uppercase .BASH is rare on case-sensitive
+        // Linux filesystems; users on case-insensitive filesystems (macOS default)
+        // can rename if they want extraction.
+        assert_eq!(detect_language(Path::new("foo.bash")), Some(Language::Bash));
+        assert_eq!(detect_language(Path::new("foo.sh")), Some(Language::Bash));
+        // No false positives: a non-Bash extension must not match.
+        assert_eq!(detect_language(Path::new("foo.zsh")), None);
+        assert_eq!(detect_language(Path::new("foo")), None);
+    }
+
+    #[test]
+    fn test_parse_bash_function_spans() {
+        // Three top-level functions; each must be captured as a Function
+        // symbol with a valid (start, end) span. Mirrors test_parse_python_function_spans.
+        let source = r#"greet() {
+    echo hello
+}
+
+add_numbers() {
+    local result=$(( $1 + $2 ))
+    echo "$result"
+}
+
+run_demo() {
+    if [ "$1" = "yes" ]; then
+        add_numbers 1 2
+    fi
+}
+"#;
+
+        let spans = parse_source_spans(source, Language::Bash).unwrap();
+        let names: Vec<_> = spans.iter().map(|(s, _, _, _)| s.name.as_str()).collect();
+        assert!(names.contains(&"greet"));
+        assert!(names.contains(&"add_numbers"));
+        assert!(names.contains(&"run_demo"));
+
+        for (sig, kind, start, end) in &spans {
+            assert_eq!(*kind, SymbolKind::Function);
+            assert!(
+                start <= end,
+                "{} span {}-{} not ordered",
+                sig.name,
+                start,
+                end
+            );
+        }
+
+        // The first function starts on line 1.
+        let (_, _, greet_start, greet_end) =
+            spans.iter().find(|(s, _, _, _)| s.name == "greet").unwrap();
+        assert_eq!(*greet_start, 1);
+        assert!(greet_end > greet_start);
+    }
+
+    #[test]
+    fn test_parse_bash_imports_and_exports() {
+        // `source` and `.` are captured as Require imports;
+        // `export FOO`, `export FOO=bar`, `declare -x FOO=bar` are exports.
+        let source = r#"source ./common.sh
+. ./env.sh
+
+export PATH_VAR
+export CONFIG_PATH="/etc/app/config"
+declare -x SECRET_TOKEN="xyz"
+"#;
+
+        let (imports, exports) = parse_source_imports_exports(source, Language::Bash).unwrap();
+
+        // Two imports: the `source` line and the `.` line.
+        let import_sources: Vec<_> = imports.iter().map(|i| i.source.as_str()).collect();
+        assert!(
+            import_sources.contains(&"./common.sh"),
+            "missing source import, got: {:?}",
+            import_sources
+        );
+        assert!(
+            import_sources.contains(&"./env.sh"),
+            "missing dot import, got: {:?}",
+            import_sources
+        );
+
+        // Three exports: PATH_VAR, CONFIG_PATH, SECRET_TOKEN.
+        let export_names: Vec<String> = exports
+            .iter()
+            .flat_map(|e| match &e.export_kind {
+                ExportKind::Named(names) => names.clone(),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert!(export_names.contains(&"PATH_VAR".to_string()));
+        assert!(export_names.contains(&"CONFIG_PATH".to_string()));
+        assert!(export_names.contains(&"SECRET_TOKEN".to_string()));
+    }
+
+    #[test]
+    fn test_parse_file_bash_fixture() {
+        // End-to-end: read the fixture, parse it, assert the three functions
+        // are found. Mirrors test_parse_file_python_fixture.
+        let path = std::path::Path::new("tests/fixtures/fixture.sh");
+        let sigs = parse_file(path).expect("parse fixture.sh");
+        let names: Vec<_> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"greet"));
+        assert!(names.contains(&"add_numbers"));
+        assert!(names.contains(&"run_demo"));
+        // Each signature must have a 1-based line >= 1.
+        for s in &sigs {
+            assert!(s.line >= 1, "sig {} has invalid line {}", s.name, s.line);
+        }
     }
 }
