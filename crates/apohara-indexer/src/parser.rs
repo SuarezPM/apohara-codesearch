@@ -11,6 +11,7 @@ pub enum Language {
     Go,
     Bash,
     Java,
+    C,
 }
 
 /// Represents an import statement
@@ -200,6 +201,7 @@ pub fn detect_language(path: &Path) -> Option<Language> {
         Some("go") => Some(Language::Go),
         Some("bash") | Some("sh") => Some(Language::Bash),
         Some("java") => Some(Language::Java),
+        Some("c") | Some("h") => Some(Language::C),
         _ => None,
     }
 }
@@ -253,6 +255,11 @@ pub fn parse_source(
                 .set_language(&tree_sitter_java::LANGUAGE.into())
                 .map_err(|e| ParseError::ParserInit(format!("Java: {:?}", e)))?;
         }
+        Language::C => {
+            parser
+                .set_language(&tree_sitter_c::LANGUAGE.into())
+                .map_err(|e| ParseError::ParserInit(format!("C: {:?}", e)))?;
+        }
     }
 
     let tree = parser.parse(source, None).ok_or(ParseError::ParseFailed)?;
@@ -267,6 +274,7 @@ pub fn parse_source(
         Language::Go => extract_go_functions(&root, source, &mut signatures),
         Language::Bash => extract_bash_functions(&root, source, &mut signatures),
         Language::Java => extract_java_functions(&root, source, &mut signatures),
+        Language::C => extract_c_functions(&root, source, &mut signatures),
     }
 
     Ok(signatures)
@@ -669,6 +677,11 @@ pub fn parse_source_imports_exports(
                 .set_language(&tree_sitter_java::LANGUAGE.into())
                 .map_err(|e| ParseError::ParserInit(format!("Java: {:?}", e)))?;
         }
+        Language::C => {
+            parser
+                .set_language(&tree_sitter_c::LANGUAGE.into())
+                .map_err(|e| ParseError::ParserInit(format!("C: {:?}", e)))?;
+        }
     }
 
     let tree = parser.parse(source, None).ok_or(ParseError::ParseFailed)?;
@@ -721,6 +734,17 @@ pub fn parse_source_imports_exports(
             // pass: `extract_java_type_spans` emits `Class`/`Interface`/`Enum`
             // symbols whose presence in the symbols table IS the export
             // surface. We intentionally leave `exports` empty here.
+        }
+        Language::C => {
+            // C imports: `#include` is a preprocessor directive; the path is
+            // a `string_literal` or `system_lib_string` child of a
+            // `preproc_include` node. Captured as Require-kind imports.
+            extract_c_imports(&root, source, &mut imports);
+            // C has no module system or export keyword. Functions are "public"
+            // purely by being non-static; modeling that would mean walking
+            // every top-level declaration to classify its storage class —
+            // outside the import/span scope of this pass. We leave `exports`
+            // empty (mirrors the Go precedent).
         }
     }
 
@@ -1412,6 +1436,11 @@ pub fn parse_source_spans(
                 .set_language(&tree_sitter_java::LANGUAGE.into())
                 .map_err(|e| ParseError::ParserInit(format!("Java: {:?}", e)))?;
         }
+        Language::C => {
+            parser
+                .set_language(&tree_sitter_c::LANGUAGE.into())
+                .map_err(|e| ParseError::ParserInit(format!("C: {:?}", e)))?;
+        }
     }
 
     let tree = parser.parse(source, None).ok_or(ParseError::ParseFailed)?;
@@ -1426,6 +1455,7 @@ pub fn parse_source_spans(
         Language::Go => extract_go_function_spans(&root, source, &mut spans),
         Language::Bash => extract_bash_function_spans(&root, source, &mut spans),
         Language::Java => extract_java_function_spans(&root, source, &mut spans),
+        Language::C => extract_c_function_spans(&root, source, &mut spans),
     }
 
     Ok(spans)
@@ -2421,6 +2451,143 @@ fn extract_java_imports(node: &Node, source: &str, imports: &mut Vec<ImportState
     let cursor = &mut node.walk();
     for child in node.children(cursor) {
         extract_java_imports(&child, source, imports);
+    }
+}
+
+// ============================================================================
+// C extraction
+// ============================================================================
+
+/// Extract function signatures from C source.
+///
+/// Mirrors the Python/Java extractors: a recursive child walk where
+/// `function_definition` is the unit. C has no methods/classes — just free
+/// functions — so the surface here is intentionally smaller than Python/Go.
+fn extract_c_functions(node: &Node, source: &str, signatures: &mut Vec<FunctionSignature>) {
+    let cursor = &mut node.walk();
+
+    for child in node.children(cursor) {
+        match child.kind() {
+            "function_definition" => {
+                if let Some(sig) = parse_c_function(&child, source) {
+                    signatures.push(sig);
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_c_functions(&body, source, signatures);
+                }
+            }
+            _ => {
+                extract_c_functions(&child, source, signatures);
+            }
+        }
+    }
+}
+
+/// Parse a C `function_definition` (the name lives in a `function_declarator`
+/// child as a direct `identifier` child, NOT a field — tree-sitter-c models
+/// `function_declarator` as having `identifier` and `parameter_list` children
+/// without field-name tags). Parameters come from a `parameter_list` child.
+fn parse_c_function(node: &Node, source: &str) -> Option<FunctionSignature> {
+    let declarator = node.child_by_field_name("declarator")?;
+    // The function name is the first `identifier` child of the declarator.
+    let name = {
+        let mut found_name = None;
+        let d_cursor = &mut declarator.walk();
+        for c in declarator.children(d_cursor) {
+            if c.kind() == "identifier" {
+                if let Ok(t) = c.utf8_text(source.as_bytes()) {
+                    found_name = Some(t.to_string());
+                    break;
+                }
+            }
+        }
+        found_name?
+    };
+
+    let start_position = node.start_position();
+    let mut sig =
+        FunctionSignature::new(name).with_position(start_position.row + 1, start_position.column);
+    if let Some(params) = declarator.child_by_field_name("parameters") {
+        let p_cursor = &mut params.walk();
+        for param in params.children(p_cursor) {
+            if param.kind() == "parameter_declaration" {
+                if let Some(p_name) = param.child_by_field_name("declarator") {
+                    if let Ok(p_text) = p_name.utf8_text(source.as_bytes()) {
+                        let type_text = param
+                            .child_by_field_name("type")
+                            .and_then(|t| t.utf8_text(source.as_bytes()).ok())
+                            .map(|s| s.to_string());
+                        sig.parameters.push(Parameter {
+                            name: p_text.to_string(),
+                            type_annotation: type_text,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    if let Some(ret_type) = node.child_by_field_name("type") {
+        if let Ok(t) = ret_type.utf8_text(source.as_bytes()) {
+            sig.return_type = Some(t.to_string());
+        }
+    }
+    Some(sig)
+}
+
+/// Extract spans of C function definitions. Mirrors `extract_python_function_spans`.
+fn extract_c_function_spans(
+    node: &Node,
+    source: &str,
+    spans: &mut Vec<(FunctionSignature, SymbolKind, usize, usize)>,
+) {
+    let cursor = &mut node.walk();
+
+    for child in node.children(cursor) {
+        match child.kind() {
+            "function_definition" => {
+                if let Some(sig) = parse_c_function(&child, source) {
+                    spans.push(span_of(&child, sig, SymbolKind::Function));
+                }
+                if let Some(body) = child.child_by_field_name("body") {
+                    extract_c_function_spans(&body, source, spans);
+                }
+            }
+            _ => {
+                extract_c_function_spans(&child, source, spans);
+            }
+        }
+    }
+}
+
+/// Extract C `#include` directives as Require-kind imports.
+///
+/// tree-sitter-c models these as `preproc_include` nodes whose children are:
+///   - `#include` (preproc keyword)
+///   - `system_lib_string` (for `<stdio.h>`) or `string_literal` (for `"x.h"`)
+fn extract_c_imports(node: &Node, source: &str, imports: &mut Vec<ImportStatement>) {
+    if node.kind() == "preproc_include" {
+        let line = node.start_position().row + 1;
+        let cursor = &mut node.walk();
+        for child in node.children(cursor) {
+            let k = child.kind();
+            if k == "system_lib_string" || k == "string_literal" {
+                if let Ok(text) = child.utf8_text(source.as_bytes()) {
+                    imports.push(
+                        ImportStatement::new(
+                            text.to_string(),
+                            ImportKind::Require(text.to_string()),
+                        )
+                        .with_line(line),
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
+    let cursor = &mut node.walk();
+    for child in node.children(cursor) {
+        extract_c_imports(&child, source, imports);
     }
 }
 
@@ -3433,5 +3600,77 @@ import static java.util.Collections.emptyList;
         assert!(names.contains(&"Point"));
         assert!(names.contains(&"main"));
         assert!(names.contains(&"add"));
+    }
+
+    #[test]
+    fn test_detect_language_c() {
+        // .c and .h both map to C. C++ is intentionally NOT mapped here —
+        // that's F1-KOTLIN-CPP's concern (.cpp/.hpp/.cc/.cxx) and uses the
+        // tree-sitter-cpp grammar. Mixing C and C++ under the same Language
+        // variant would surface C++ syntax errors with the C grammar.
+        assert_eq!(detect_language(Path::new("foo.c")), Some(Language::C));
+        assert_eq!(detect_language(Path::new("foo.h")), Some(Language::C));
+        // C++ extensions must NOT match (deferred to the F1-KOTLIN-CPP story).
+        assert_eq!(detect_language(Path::new("foo.cpp")), None);
+        assert_eq!(detect_language(Path::new("foo.hpp")), None);
+        assert_eq!(detect_language(Path::new("foo.cc")), None);
+    }
+
+    #[test]
+    fn test_parse_c_function_spans() {
+        // Two free functions with parameters and return types.
+        let source = r#"int add(int a, int b) {
+    return a + b;
+}
+
+int main(int argc, char **argv) {
+    return 0;
+}
+"#;
+
+        let spans = parse_source_spans(source, Language::C).unwrap();
+        let names: Vec<_> = spans.iter().map(|(s, _, _, _)| s.name.as_str()).collect();
+        assert!(names.contains(&"add"));
+        assert!(names.contains(&"main"));
+
+        // Every span must be a Function symbol.
+        for (_, kind, start, end) in &spans {
+            assert_eq!(*kind, SymbolKind::Function);
+            assert!(start <= end);
+        }
+
+        // add has 2 parameters, return type int.
+        let add = spans.iter().find(|(s, _, _, _)| s.name == "add").unwrap();
+        assert_eq!(add.0.parameters.len(), 2);
+        assert_eq!(add.0.return_type, Some("int".to_string()));
+    }
+
+    #[test]
+    fn test_parse_c_imports() {
+        // System <...> and local "..." includes both captured as Require.
+        let source = r#"#include <stdio.h>
+#include <stdlib.h>
+#include "config.h"
+#include "logger.h"
+"#;
+
+        let (imports, _exports) = parse_source_imports_exports(source, Language::C).unwrap();
+
+        let import_sources: Vec<_> = imports.iter().map(|i| i.source.as_str()).collect();
+        assert!(import_sources.contains(&"<stdio.h>"));
+        assert!(import_sources.contains(&"<stdlib.h>"));
+        assert!(import_sources.contains(&"\"config.h\""));
+        assert!(import_sources.contains(&"\"logger.h\""));
+    }
+
+    #[test]
+    fn test_parse_file_c_fixture() {
+        let path = std::path::Path::new("tests/fixtures/fixture.c");
+        let source = std::fs::read_to_string(path).expect("read fixture.c");
+        let spans = parse_source_spans(&source, Language::C).unwrap();
+        let names: Vec<_> = spans.iter().map(|(s, _, _, _)| s.name.as_str()).collect();
+        assert!(names.contains(&"add"));
+        assert!(names.contains(&"main"));
+        assert!(names.contains(&"unused_helper"));
     }
 }
