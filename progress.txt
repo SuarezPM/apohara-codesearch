@@ -157,3 +157,32 @@ Front 2 closed. Front 1 partial. Front 3 needs Pablo's input on:
   - Size budget: linux-x64 is +62.58% over v0.2.0. windows-msvc budget
     is +20% per the C++/SACRED resolution; needs CI verification.
   - Whether to push 10 commits or keep them local.
+
+## 2026-06-11 21:55 — SESSION CLOSE: ralph cancelled, v0.3.0 ready
+- All 12 PRD stories closed (F2-AUDIT, F2-LOCK, F0-CORPUS-FREEZE,
+  F1-BASH, F1-JAVA, F1-C, F1-RUBY, F1-KOTLIN-CPP, F3-MEASURE,
+  F3-FLIP-CHECK, F3-RELEASE, OQ-CLOSE).
+- 12 LOCAL commits on main: b958258 (last feat/grammar) +
+  fd97a19 (style) + df55d50 (docs) + 3b6055c (release v0.3.0) +
+  eae6287 (OQ-CLOSE). Plus the 6 freeze/scorecard commits earlier.
+- Tag v0.3.0 local. NOT PUSHED (per push FORBIDDEN rule).
+- Working tree clean except progress.txt (untracked but expected).
+- Front 1: 5/6 grammars landed (Kotlin deferred per barred-entry).
+- Front 2: audit complete; cargo-audit pin landed; 2 of 3 QWs no-op
+  (QW-1 repo-age, QW-3 scorecard indexing lag).
+- Front 3: v0.3.0 release prep complete; NO default flips this cycle
+  (deferred to v0.4.0 due to measurement gap, per Pablo's decision).
+- 166/166 tests pass; clippy + fmt clean.
+- Binary size: +62.58% on linux-x64 (within Pablo's approved budget).
+
+Next session (or today if resumed): Pablo reviews the 12 commits and
+pushes via `git push origin main --follow-tags` to trigger the
+cargo-dist release pipeline. Or reviews first if desired.
+
+v0.4.0 follow-ups (recorded for the next ralph session):
+- Kotlin grammar (either find a 0.23.x fork or relax the workspace pin).
+- v0.3.0 -> v0.4.0 measurement: bench the proposed adaptive/diversify
+  defaults server-side, with rollback path per plan §10.
+- v0.8 OQ-2..OQ-5 still open: AC4 scope, non-gated mirror, Matryoshka
+  dim, ort vs fastembed (they need per-question Pablo sign-off).
+- The v0.8 Story 1 (code-trained embedder) is the real lever per OQ-3 v0.5.
