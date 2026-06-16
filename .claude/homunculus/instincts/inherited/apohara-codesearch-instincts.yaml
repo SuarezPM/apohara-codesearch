@@ -1,0 +1,586 @@
+# Instincts generated from https://github.com/SuarezPM/apohara-codesearch
+# Generated: 2026-06-11T20:08:12.900Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: apohara-codesearch-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: chore, feat, docs, style, release
+
+## Evidence
+
+- 14 commits analyzed
+- Detected conventional commit pattern
+- Examples: chore(ci): pin cargo-audit to Cargo.lock version (scorecard Pinned-Dependencies), style: cargo fmt on corpus_freeze.rs
+
+---
+id: apohara-codesearch-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Commit Length
+
+## Action
+
+Write moderate-length commit messages (~62 characters)
+
+## Evidence
+
+- Average commit message length: 62 chars
+- Based on 14 commits
+
+---
+id: apohara-codesearch-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: apohara-codesearch-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: apohara-codesearch-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: apohara-codesearch-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: apohara-codesearch-test-naming
+trigger: "when creating a test file"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Test Naming
+
+## Action
+
+Name test files using the pattern: *.test.ts
+
+## Evidence
+
+- File pattern: *.test.ts
+- Consistent across test files
+
+---
+id: apohara-codesearch-test-types
+trigger: "when planning tests for a feature"
+confidence: 0.7
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Test Types
+
+## Action
+
+Write unit, integration tests to match project standards
+
+## Evidence
+
+- Test types detected: unit, integration
+- Coverage config: no
+
+---
+id: apohara-codesearch-workflow-feature-development
+trigger: "when implementing a new feature"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Workflow Feature Development
+
+## Action
+
+Follow the feature-development workflow:
+1. Add feature implementation
+2. Add tests for feature
+3. Update documentation
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~13x per month
+- Files: **/*.test.*
+
+---
+id: apohara-codesearch-workflow-add-new-tree-sitter-grammar
+trigger: "when doing add new tree sitter grammar"
+confidence: 0.75
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Workflow Add New Tree Sitter Grammar
+
+## Action
+
+Follow the add-new-tree-sitter-grammar workflow:
+1. Add new tree-sitter-<lang> dependency to workspace (Cargo.toml, Cargo.lock, crates/apohara-indexer/Cargo.toml).
+2. Update parser logic to support new Language variant (crates/apohara-indexer/src/parser.rs, incremental.rs).
+3. Add language detection and extraction logic (parser.rs, incremental.rs).
+4. Add new test fixtures for the language (crates/apohara-indexer/tests/fixtures/fixture.<ext>, imports.<ext>).
+5. Write unit tests for detection, extraction, and import logic (crates/apohara-indexer/src/parser.rs, tests/).
+6. Add new fuzz target and update fuzz/Cargo.toml (fuzz/fuzz_targets/parse_<lang>_source.rs, fuzz/fuzz_targets/parse_source.rs).
+7. Update integration tests if necessary (e.g., integration.rs for extension handling).
+8. Document binary size impact and test results in commit message.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~5x per month
+- Files: Cargo.toml, Cargo.lock, crates/apohara-indexer/Cargo.toml
+
+---
+id: apohara-codesearch-workflow-freeze-benchmark-corpus-and-guard
+trigger: "when doing freeze benchmark corpus and guard"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Workflow Freeze Benchmark Corpus And Guard
+
+## Action
+
+Follow the freeze-benchmark-corpus-and-guard workflow:
+1. Copy or update files in tests/fixtures/bench-corpus-frozen-*/.
+2. Add or update guard test to check content hashes (crates/apohara-codesearch/tests/corpus_freeze.rs).
+3. Update or add relevant dev-dependencies (e.g., sha2 in Cargo.toml, Cargo.lock).
+4. Document the freeze and hashes in commit message and/or BENCHMARK.md.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: tests/fixtures/bench-corpus-frozen-*/, crates/apohara-codesearch/tests/corpus_freeze.rs, Cargo.toml
+
+---
+id: apohara-codesearch-workflow-release-version-bump-and-docs
+trigger: "when doing release version bump and docs"
+confidence: 0.55
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Workflow Release Version Bump And Docs
+
+## Action
+
+Follow the release-version-bump-and-docs workflow:
+1. Update version numbers in all relevant manifests (Cargo.toml, npm/package.json, marketplace.json, .claude-plugin/plugin.json).
+2. Update CHANGELOG.md with new version entry.
+3. Update or add release notes to BENCHMARK.md, README.md, and/or progress.txt.
+4. Prepare git tag and document in commit message.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~1x per month
+- Files: crates/apohara-indexer/Cargo.toml, crates/apohara-codesearch/Cargo.toml, npm/package.json
+
+---
+id: apohara-codesearch-workflow-update-or-add-benchmark-documentation
+trigger: "when doing update or add benchmark documentation"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Workflow Update Or Add Benchmark Documentation
+
+## Action
+
+Follow the update-or-add-benchmark-documentation workflow:
+1. Edit BENCHMARK.md to add new section or update existing with commit links, rationale, and measurement plan.
+2. Reference relevant corpus freeze commits and guard tests.
+3. Ensure documentation is cross-linked to code/tests.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: BENCHMARK.md
+
+---
+id: apohara-codesearch-instinct-file-naming
+trigger: "When creating or renaming a source file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Instinct File Naming
+
+## Action
+
+Use camelCase for file names
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.files: camelCase
+
+---
+id: apohara-codesearch-instinct-function-naming
+trigger: "When defining a function"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Instinct Function Naming
+
+## Action
+
+Use camelCase for function names
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.functions: camelCase
+
+---
+id: apohara-codesearch-instinct-class-naming
+trigger: "When defining a class or struct"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Instinct Class Naming
+
+## Action
+
+Use PascalCase for class/struct names
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.classes: PascalCase
+
+---
+id: apohara-codesearch-instinct-constant-naming
+trigger: "When defining a constant"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Instinct Constant Naming
+
+## Action
+
+Use SCREAMING_SNAKE_CASE for constant names
+
+## Evidence
+
+- Pattern in codeStyle.namingConventions.constants: SCREAMING_SNAKE_CASE
+
+---
+id: apohara-codesearch-instinct-import-style
+trigger: "When importing modules in Rust code"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Instinct Import Style
+
+## Action
+
+Use relative imports
+
+## Evidence
+
+- Pattern in codeStyle.importStyle: relative
+
+---
+id: apohara-codesearch-instinct-export-style
+trigger: "When exporting modules or items"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Instinct Export Style
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern in codeStyle.exportStyle: named
+
+---
+id: apohara-codesearch-instinct-test-file-location
+trigger: "When adding new tests"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Instinct Test File Location
+
+## Action
+
+Place test files in the 'tests' folder, separate from source code
+
+## Evidence
+
+- architecture.folderStructure.testLocation: separate
+- commonFolders includes 'tests'
+
+---
+id: apohara-codesearch-instinct-test-file-pattern
+trigger: "When naming a test file (TypeScript/JS)"
+confidence: 0.7
+domain: testing
+source: repo-analysis
+source_repo: SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Instinct Test File Pattern
+
+## Action
+
+Use the pattern '*.test.ts'
+
+## Evidence
+
+- testing.filePattern: *.test.ts
+
+---
+id: apohara-codesearch-instinct-test-types
+trigger: "When writing tests"
+confidence: 0.75
+domain: testing
+source: repo-analysis
+source_repo: SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Instinct Test Types
+
+## Action
+
+Include both unit and integration tests
+
+## Evidence
+
+- testing.testTypes: unit, integration
+
+---
+id: apohara-codesearch-instinct-git-commit-format
+trigger: "When writing a commit message"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Instinct Git Commit Format
+
+## Action
+
+Use conventional commits with prefixes like chore, feat, docs, style, release, and a short scope in parentheses if needed
+
+## Evidence
+
+- Pattern in commits.type: conventional
+- Prefixes: chore, feat, docs, style, release
+- Seen in commit: 'chore(ci): pin cargo-audit to Cargo.lock version (scorecard Pinned-Dependencies)'
+
+---
+id: apohara-codesearch-instinct-commit-length
+trigger: "When writing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Instinct Commit Length
+
+## Action
+
+Keep the commit message concise (average length ~62 characters)
+
+## Evidence
+
+- commits.averageLength: 62
+
+---
+id: apohara-codesearch-instinct-add-grammar-workflow
+trigger: "When someone wants to add structural extraction for a new language (e.g., Bash, Java, C, Ruby, C++)"
+confidence: 0.98
+domain: workflow
+source: repo-analysis
+source_repo: SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Instinct Add Grammar Workflow
+
+## Action
+
+Follow the add-new-tree-sitter-grammar workflow: add dependency, update parser, add fixtures and tests, add fuzz target, document impact
+
+## Evidence
+
+- Workflow: add-new-tree-sitter-grammar
+- Example commits: 'feat(grammar): add tree-sitter-bash structural extractor', 'feat(grammar): add tree-sitter-java structural extractor'
+
+---
+id: apohara-codesearch-instinct-freeze-corpus-workflow
+trigger: "When establishing or updating a benchmark baseline for performance or regression testing"
+confidence: 0.92
+domain: workflow
+source: repo-analysis
+source_repo: SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Instinct Freeze Corpus Workflow
+
+## Action
+
+Copy/update frozen corpus files, add/update guard test for hashes, update dev-dependencies, document freeze in BENCHMARK.md
+
+## Evidence
+
+- Workflow: freeze-benchmark-corpus-and-guard
+- Example commit: 'chore(bench): freeze corpus B (golden test) + add corpus_freeze guard'
+
+---
+id: apohara-codesearch-instinct-release-workflow
+trigger: "When cutting a new release version"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Instinct Release Workflow
+
+## Action
+
+Update all manifest version numbers, update CHANGELOG.md, add release notes to BENCHMARK.md/README.md/progress.txt, prepare git tag
+
+## Evidence
+
+- Workflow: release-version-bump-and-docs
+- Example commit: 'release(v0.3.0): 5 new grammars, corpus freezes, no default flips'
+
+---
+id: apohara-codesearch-instinct-benchmark-docs-workflow
+trigger: "When recording or explaining a new benchmark baseline or corpus freeze"
+confidence: 0.85
+domain: workflow
+source: repo-analysis
+source_repo: SuarezPM/apohara-codesearch
+---
+
+# Apohara Codesearch Instinct Benchmark Docs Workflow
+
+## Action
+
+Edit BENCHMARK.md to add/update section with commit links, rationale, measurement plan, and cross-links to code/tests
+
+## Evidence
+
+- Workflow: update-or-add-benchmark-documentation
+- Example commit: 'docs(bench): document v0.3.0 corpus A and corpus B freezes'
+
