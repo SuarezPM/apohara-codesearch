@@ -46,7 +46,7 @@ apohara-indexer = { path = "../apohara-indexer", version = "0.3.0" }
 #   transport-io  — stdio transport (rmcp::transport::stdio)
 #   macros        — #[tool_router] / #[tool] / #[tool_handler]
 #   schemars      — JsonSchema derive integration for tool input schemas
-rmcp = { version = "1", features = ["server", "transport-io", "macros", "schemars"] }
+rmcp = { version = "2", features = ["server", "transport-io", "macros", "schemars"] }
 schemars = "1"
 
 anyhow = { workspace = true }
